@@ -368,4 +368,104 @@ matters.post('/:id/submit', requireRole('secretaria'), async (c) => {
   }
 });
 
+/**
+ * POST /api/matters/:id/cancel
+ * Cancela envio e volta matéria para rascunho
+ */
+matters.post('/:id/cancel', requireRole('secretaria'), async (c) => {
+  try {
+    const user = c.get('user');
+    const id = c.req.param('id');
+    
+    const matter = await c.env.DB
+      .prepare('SELECT * FROM matters WHERE id = ?')
+      .bind(id)
+      .first<Matter>();
+    
+    if (!matter) {
+      return c.json({ error: 'Matéria não encontrada' }, 404);
+    }
+    
+    if (matter.secretaria_id !== user.secretaria_id) {
+      return c.json({ error: 'Acesso negado' }, 403);
+    }
+    
+    if (matter.status !== 'submitted' && matter.status !== 'under_review') {
+      return c.json({ error: 'Apenas matérias enviadas podem ser canceladas' }, 400);
+    }
+    
+    await c.env.DB
+      .prepare(`
+        UPDATE matters 
+        SET status = 'draft', submitted_at = NULL, reviewer_id = NULL, reviewed_at = NULL, updated_at = datetime('now')
+        WHERE id = ?
+      `)
+      .bind(id)
+      .run();
+    
+    return c.json({ message: 'Envio cancelado. Matéria voltou para rascunho.' });
+    
+  } catch (error) {
+    console.error('Cancel submission error:', error);
+    return c.json({ error: 'Erro ao cancelar envio' }, 500);
+  }
+});
+
+/**
+ * DELETE /api/matters/:id
+ * Exclui matéria (apenas rascunhos)
+ */
+matters.delete('/:id', requireRole('secretaria'), async (c) => {
+  try {
+    const user = c.get('user');
+    const id = c.req.param('id');
+    
+    const matter = await c.env.DB
+      .prepare('SELECT * FROM matters WHERE id = ?')
+      .bind(id)
+      .first<Matter>();
+    
+    if (!matter) {
+      return c.json({ error: 'Matéria não encontrada' }, 404);
+    }
+    
+    if (matter.secretaria_id !== user.secretaria_id) {
+      return c.json({ error: 'Acesso negado' }, 403);
+    }
+    
+    if (matter.status !== 'draft') {
+      return c.json({ error: 'Apenas rascunhos podem ser excluídos' }, 400);
+    }
+    
+    // Excluir versões
+    await c.env.DB
+      .prepare('DELETE FROM matter_versions WHERE matter_id = ?')
+      .bind(id)
+      .run();
+    
+    // Excluir matéria
+    await c.env.DB
+      .prepare('DELETE FROM matters WHERE id = ?')
+      .bind(id)
+      .run();
+    
+    // Log de auditoria
+    const ipAddress = c.req.header('CF-Connecting-IP') || c.req.header('X-Real-IP') || 'unknown';
+    const userAgent = c.req.header('User-Agent') || 'unknown';
+    await c.env.DB
+      .prepare(`
+        INSERT INTO audit_logs (user_id, entity_type, entity_id, action, ip_address, user_agent, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      `)
+      .bind(user.id, 'matter', id, 'delete', ipAddress, userAgent)
+      .run();
+    
+    return c.json({ message: 'Matéria excluída com sucesso' });
+    
+  } catch (error) {
+    console.error('Delete matter error:', error);
+    return c.json({ error: 'Erro ao excluir matéria' }, 500);
+  }
+});
+
 export default matters;
