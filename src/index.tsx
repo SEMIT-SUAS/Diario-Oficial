@@ -55,6 +55,9 @@ app.get('/', (c) => {
     <style>
         body {
             font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
         }
         .sidebar {
             transition: transform 0.3s ease-in-out;
@@ -64,19 +67,76 @@ app.get('/', (c) => {
                 transform: translateX(-100%);
             }
         }
+        
+        /* WebGL Canvas Background */
+        #webgl-background {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+        }
+        
+        .login-container {
+            position: relative;
+            z-index: 10;
+        }
+        
+        .login-card {
+            backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .logo-pulse {
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .footer-link {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+        
+        .footer-link:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
     </style>
 </head>
 <body class="bg-gray-50">
     <div id="app">
-        <!-- Login Screen -->
-        <div id="loginScreen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-blue-700 px-4">
-            <div class="bg-white rounded-lg shadow-2xl p-8 w-full max-w-md">
+        <!-- Login Screen with WebGL Background -->
+        <div id="loginScreen" class="min-h-screen flex flex-col items-center justify-center px-4">
+            <!-- WebGL Canvas -->
+            <canvas id="webgl-background"></canvas>
+            
+            <!-- Login Card -->
+            <div class="login-container login-card rounded-2xl shadow-2xl p-8 w-full max-w-md">
                 <div class="text-center mb-8">
-                    <div class="bg-blue-600 w-20 h-20 rounded-full mx-auto mb-4 flex items-center justify-center">
-                        <i class="fas fa-newspaper text-white text-3xl"></i>
+                    <div class="bg-gradient-to-br from-blue-600 to-purple-600 w-24 h-24 rounded-full mx-auto mb-4 flex items-center justify-center logo-pulse shadow-lg">
+                        <i class="fas fa-newspaper text-white text-4xl"></i>
                     </div>
-                    <h1 class="text-3xl font-bold text-gray-800">DOM</h1>
-                    <p class="text-gray-600 mt-2">Diário Oficial Municipal</p>
+                    <h1 class="text-4xl font-bold gradient-text mb-2">DOM</h1>
+                    <p class="text-gray-600 text-lg">Diário Oficial Municipal</p>
+                    <p class="text-gray-500 text-sm mt-1">São Luís - MA</p>
                 </div>
                 
                 <form id="loginForm" class="space-y-6">
@@ -124,15 +184,27 @@ app.get('/', (c) => {
                     </div>
                 </form>
                 
-                <div id="loginError" class="mt-4 text-red-600 text-sm text-center hidden"></div>
-                <div id="loginSuccess" class="mt-4 text-green-600 text-sm text-center hidden"></div>
+                <div id="loginError" class="mt-4 p-3 bg-red-50 border border-red-200 text-red-600 text-sm text-center rounded-lg hidden"></div>
+                <div id="loginSuccess" class="mt-4 p-3 bg-green-50 border border-green-200 text-green-600 text-sm text-center rounded-lg hidden"></div>
                 
-                <div class="mt-8 text-center text-sm text-gray-600">
-                    <p>Credenciais de teste:</p>
+                <div class="mt-8 text-center text-sm text-gray-600 bg-gray-50 rounded-lg p-4">
+                    <p class="font-semibold text-gray-700 mb-2">Credenciais de teste:</p>
                     <p class="mt-1"><strong>Admin:</strong> admin@municipio.gov.br / admin123</p>
                     <p><strong>SEMAD:</strong> coordenador@semad.gov.br / semad123</p>
                     <p><strong>Secretaria:</strong> joao.silva@semed.gov.br / secretaria123</p>
                 </div>
+            </div>
+            
+            <!-- Footer with Prefeitura Link -->
+            <div class="login-container mt-8 text-center">
+                <a href="https://www.saoluis.ma.gov.br" target="_blank" rel="noopener noreferrer" class="footer-link inline-flex items-center space-x-2 text-white font-medium">
+                    <i class="fas fa-landmark"></i>
+                    <span>Portal da Prefeitura de São Luís</span>
+                    <i class="fas fa-external-link-alt text-sm"></i>
+                </a>
+                <p class="text-white text-sm mt-4 opacity-80">
+                    © 2025 Prefeitura Municipal de São Luís - MA
+                </p>
             </div>
         </div>
         
@@ -250,8 +322,136 @@ app.get('/', (c) => {
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
     <script src="/static/app.js"></script>
+    
+    <script>
+    // WebGL Background Animation with Three.js
+    (function() {
+        const canvas = document.getElementById('webgl-background');
+        if (!canvas) return;
+        
+        // Scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        
+        // Gradient background colors (blue to purple)
+        scene.fog = new THREE.Fog(0x667eea, 1, 15);
+        renderer.setClearColor(0x667eea, 1);
+        
+        // Create particles
+        const particlesGeometry = new THREE.BufferGeometry();
+        const particlesCount = 3000;
+        const posArray = new Float32Array(particlesCount * 3);
+        const colorsArray = new Float32Array(particlesCount * 3);
+        
+        for(let i = 0; i < particlesCount * 3; i += 3) {
+            // Position
+            posArray[i] = (Math.random() - 0.5) * 20;
+            posArray[i + 1] = (Math.random() - 0.5) * 20;
+            posArray[i + 2] = (Math.random() - 0.5) * 20;
+            
+            // Colors (gradient from blue to purple)
+            const mixFactor = Math.random();
+            colorsArray[i] = 0.4 + mixFactor * 0.2;     // R
+            colorsArray[i + 1] = 0.5 - mixFactor * 0.2; // G
+            colorsArray[i + 2] = 0.9;                    // B
+        }
+        
+        particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        particlesGeometry.setAttribute('color', new THREE.BufferAttribute(colorsArray, 3));
+        
+        // Material
+        const particlesMaterial = new THREE.PointsMaterial({
+            size: 0.03,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.8,
+            sizeAttenuation: true,
+            blending: THREE.AdditiveBlending
+        });
+        
+        // Mesh
+        const particlesMesh = new THREE.Points(particlesGeometry, particlesMaterial);
+        scene.add(particlesMesh);
+        
+        // Add connecting lines
+        const linesGeometry = new THREE.BufferGeometry();
+        const linesMaterial = new THREE.LineBasicMaterial({
+            color: 0x88aaff,
+            transparent: true,
+            opacity: 0.1
+        });
+        
+        camera.position.z = 5;
+        
+        // Mouse movement effect
+        let mouseX = 0;
+        let mouseY = 0;
+        
+        document.addEventListener('mousemove', (event) => {
+            mouseX = (event.clientX / window.innerWidth) * 2 - 1;
+            mouseY = -(event.clientY / window.innerHeight) * 2 + 1;
+        });
+        
+        // Animation
+        let time = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+            time += 0.001;
+            
+            // Rotate particles
+            particlesMesh.rotation.y = time * 0.5;
+            particlesMesh.rotation.x = time * 0.3;
+            
+            // Mouse interaction
+            particlesMesh.rotation.y += mouseX * 0.01;
+            particlesMesh.rotation.x += mouseY * 0.01;
+            
+            // Wave effect
+            const positions = particlesGeometry.attributes.position.array;
+            for(let i = 0; i < particlesCount; i++) {
+                const i3 = i * 3;
+                const x = positions[i3];
+                const y = positions[i3 + 1];
+                
+                positions[i3 + 2] = Math.sin(time * 2 + x * 0.5) * 0.5 + Math.cos(time * 2 + y * 0.5) * 0.5;
+            }
+            particlesGeometry.attributes.position.needsUpdate = true;
+            
+            renderer.render(scene, camera);
+        }
+        
+        animate();
+        
+        // Handle resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Hide WebGL when dashboard is shown
+        const observer = new MutationObserver(() => {
+            const loginScreen = document.getElementById('loginScreen');
+            if (loginScreen && loginScreen.classList.contains('hidden')) {
+                canvas.style.display = 'none';
+            } else {
+                canvas.style.display = 'block';
+            }
+        });
+        
+        observer.observe(document.getElementById('app'), {
+            attributes: true,
+            childList: true,
+            subtree: true
+        });
+    })();
+    </script>
 </body>
 </html>
   `);
