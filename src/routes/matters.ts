@@ -262,7 +262,10 @@ matters.put('/:id', async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
-    const { title, content, summary, matter_type, category_id, layout_columns } = await c.req.json();
+    const { 
+      title, content, summary, matter_type_id, category_id, 
+      layout_columns, priority, publication_date, observations 
+    } = await c.req.json();
     
     // Buscar matéria atual
     const matter = await c.env.DB
@@ -290,11 +293,17 @@ matters.put('/:id', async (c) => {
     await c.env.DB
       .prepare(`
         UPDATE matters 
-        SET title = ?, content = ?, summary = ?, matter_type = ?, 
-            category_id = ?, layout_columns = ?, version = ?, updated_at = datetime('now')
+        SET title = ?, content = ?, summary = ?, matter_type_id = ?, 
+            category_id = ?, layout_columns = ?, priority = ?, 
+            publication_date = ?, observations = ?, 
+            version = ?, updated_at = datetime('now')
         WHERE id = ?
       `)
-      .bind(title, content, summary || null, matter_type, category_id || null, layout_columns, newVersion, id)
+      .bind(
+        title, content, summary || null, matter_type_id, category_id || null, 
+        layout_columns, priority || 'normal', publication_date || null, 
+        observations || null, newVersion, id
+      )
       .run();
     
     // Criar nova versão
