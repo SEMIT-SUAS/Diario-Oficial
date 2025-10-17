@@ -377,6 +377,129 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
 });
 
 /**
+ * POST /api/editions/:id/add-matters
+ * Adiciona múltiplas matérias aprovadas à edição de uma só vez
+ */
+editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
+  try {
+    const user = c.get('user');
+    const editionId = parseInt(c.req.param('id'));
+    const { matter_ids } = await c.req.json(); // Array de IDs
+    
+    if (!Array.isArray(matter_ids) || matter_ids.length === 0) {
+      return c.json({ error: 'matter_ids deve ser um array com pelo menos 1 ID' }, 400);
+    }
+    
+    // Verificar se edição existe e não está publicada
+    const edition = await c.env.DB.prepare(
+      'SELECT * FROM editions WHERE id = ?'
+    ).bind(editionId).first();
+    
+    if (!edition) {
+      return c.json({ error: 'Edição não encontrada' }, 404);
+    }
+    
+    if (edition.status === 'published') {
+      return c.json({ 
+        error: 'Não é possível adicionar matérias a uma edição já publicada' 
+      }, 400);
+    }
+    
+    // Buscar próxima ordem de exibição
+    const lastOrder = await c.env.DB.prepare(
+      'SELECT MAX(display_order) as max_order FROM edition_matters WHERE edition_id = ?'
+    ).bind(editionId).first();
+    
+    let currentOrder = (lastOrder?.max_order || 0) + 1;
+    
+    const results = {
+      added: [] as number[],
+      skipped: [] as { id: number; reason: string }[]
+    };
+    
+    // Adicionar cada matéria
+    for (const matterId of matter_ids) {
+      try {
+        // Verificar se matéria existe e está aprovada
+        const matter = await c.env.DB.prepare(
+          'SELECT * FROM matters WHERE id = ?'
+        ).bind(matterId).first();
+        
+        if (!matter) {
+          results.skipped.push({ id: matterId, reason: 'Matéria não encontrada' });
+          continue;
+        }
+        
+        if (matter.status !== 'approved') {
+          results.skipped.push({ id: matterId, reason: 'Matéria não aprovada' });
+          continue;
+        }
+        
+        // Verificar se matéria já está na edição
+        const existing = await c.env.DB.prepare(
+          'SELECT id FROM edition_matters WHERE edition_id = ? AND matter_id = ?'
+        ).bind(editionId, matterId).first();
+        
+        if (existing) {
+          results.skipped.push({ id: matterId, reason: 'Matéria já está nesta edição' });
+          continue;
+        }
+        
+        // Adicionar matéria à edição
+        await c.env.DB.prepare(`
+          INSERT INTO edition_matters (
+            edition_id, matter_id, display_order, added_by, added_at
+          ) VALUES (?, ?, ?, ?, datetime('now'))
+        `).bind(editionId, matterId, currentOrder, user.id).run();
+        
+        // Atualizar campo edition_id na matéria
+        await c.env.DB.prepare(
+          'UPDATE matters SET edition_id = ?, updated_at = datetime(\'now\') WHERE id = ?'
+        ).bind(editionId, matterId).run();
+        
+        results.added.push(matterId);
+        currentOrder++;
+        
+      } catch (err) {
+        console.error(`Error adding matter ${matterId}:`, err);
+        results.skipped.push({ 
+          id: matterId, 
+          reason: err instanceof Error ? err.message : 'Erro desconhecido' 
+        });
+      }
+    }
+    
+    // Log de auditoria
+    const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
+    const userAgent = c.req.header('user-agent') || 'unknown';
+    
+    await c.env.DB.prepare(`
+      INSERT INTO audit_logs (
+        user_id, entity_type, entity_id, action,
+        new_values, ip_address, user_agent, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `).bind(
+      user.id,
+      'edition_matter',
+      editionId,
+      'add_multiple_matters',
+      JSON.stringify({ matter_ids, results }),
+      ipAddress,
+      userAgent
+    ).run();
+    
+    return c.json({ 
+      message: `${results.added.length} matérias adicionadas com sucesso`,
+      results
+    });
+    
+  } catch (error: any) {
+    console.error('Error adding multiple matters to edition:', error);
+    return c.json({ error: 'Erro ao adicionar matérias', details: error.message }, 500);
+  }
+});
+
+/**
  * DELETE /api/editions/:id/remove-matter/:matterId
  * Remove uma matéria da edição
  */
@@ -635,12 +758,43 @@ editions.get('/:id/pdf', async (c) => {
       'SELECT * FROM editions WHERE id = ? AND status = ?'
     ).bind(id, 'published').first();
     
-    if (!edition || !edition.pdf_url) {
-      return c.json({ error: 'PDF não encontrado' }, 404);
+    if (!edition) {
+      return c.json({ error: 'Edição não encontrada ou não publicada' }, 404);
     }
     
-    // Redirecionar para o PDF no R2
-    return c.redirect(edition.pdf_url as string);
+    // Buscar matérias da edição para gerar HTML
+    const { results: matters } = await c.env.DB.prepare(`
+      SELECT 
+        m.*,
+        s.name as secretaria_name,
+        s.acronym as secretaria_acronym,
+        u.name as author_name,
+        em.display_order
+      FROM edition_matters em
+      INNER JOIN matters m ON em.matter_id = m.id
+      LEFT JOIN secretarias s ON m.secretaria_id = s.id
+      LEFT JOIN users u ON m.author_id = u.id
+      WHERE em.edition_id = ?
+      ORDER BY em.display_order ASC
+    `).bind(id).all();
+    
+    // Gerar PDF novamente (contém o HTML)
+    const { generateEditionPDF } = await import('../utils/pdf-generator');
+    const pdfResult = await generateEditionPDF(c.env.R2, {
+      edition: edition as any,
+      matters: matters as any[]
+    });
+    
+    // Retornar HTML diretamente para download
+    const filename = `diario-oficial-${edition.edition_number.replace(/\//g, '-')}-${edition.year}.html`;
+    
+    return new Response(pdfResult.htmlContent, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'X-Content-Hash': pdfResult.hash
+      }
+    });
     
   } catch (error: any) {
     console.error('Error fetching PDF:', error);

@@ -310,6 +310,9 @@ async function loadView(view) {
             case 'settings':
                 loadSystemSettings(content);
                 break;
+            case 'verification':
+                await loadVerificationInterface(content);
+                break;
             default:
                 content.innerHTML = '<p class="text-gray-600">View em desenvolvimento...</p>';
         }
@@ -427,12 +430,28 @@ async function loadMyMatters(container) {
                 <i class="fas fa-file-alt mr-2"></i>Minhas Matérias
                 <span class="text-sm bg-blue-100 text-blue-800 px-3 py-1 rounded-full ml-2">Solicitante</span>
             </h2>
-            <button 
-                onclick="loadView('newMatter')"
-                class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition"
-            >
-                <i class="fas fa-plus mr-2"></i>Nova Matéria
-            </button>
+            <div class="flex space-x-2">
+                <button 
+                    onclick="exportMattersCSV()"
+                    class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition"
+                    title="Exportar para CSV"
+                >
+                    <i class="fas fa-file-csv mr-2"></i>CSV
+                </button>
+                <button 
+                    onclick="exportMattersXLS()"
+                    class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg transition"
+                    title="Exportar para Excel"
+                >
+                    <i class="fas fa-file-excel mr-2"></i>XLS
+                </button>
+                <button 
+                    onclick="loadView('newMatter')"
+                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition"
+                >
+                    <i class="fas fa-plus mr-2"></i>Nova Matéria
+                </button>
+            </div>
         </div>
         
         <div class="bg-white rounded-lg shadow overflow-hidden">
@@ -2133,11 +2152,19 @@ async function loadEditions(container) {
                     <h2 class="text-2xl font-bold text-gray-800">
                         <i class="fas fa-book mr-2"></i>Edições do Diário Oficial
                     </h2>
-                    ${state.user.role === 'admin' || state.user.role === 'semad' ? `
-                        <button onclick="showNewEditionModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition">
-                            <i class="fas fa-plus mr-2"></i>Nova Edição
+                    <div class="flex space-x-2">
+                        <button onclick="exportEditionsCSV()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition" title="Exportar para CSV">
+                            <i class="fas fa-file-csv mr-2"></i>CSV
                         </button>
-                    ` : ''}
+                        <button onclick="exportEditionsXLS()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg transition" title="Exportar para Excel">
+                            <i class="fas fa-file-excel mr-2"></i>XLS
+                        </button>
+                        ${state.user.role === 'admin' || state.user.role === 'semad' ? `
+                            <button onclick="showNewEditionModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition">
+                                <i class="fas fa-plus mr-2"></i>Nova Edição
+                            </button>
+                        ` : ''}
+                    </div>
                 </div>
                 
                 <div class="bg-white rounded-lg shadow overflow-hidden">
@@ -2332,10 +2359,15 @@ async function viewEdition(id) {
                             </div>
                         ` : ''}
                         
-                        ${data.status === 'published' && data.pdf_url ? `
-                            <a href="${data.pdf_url}" target="_blank" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg inline-block">
-                                <i class="fas fa-file-pdf mr-2"></i>Download PDF
-                            </a>
+                        ${data.status === 'published' ? `
+                            <div class="space-x-2">
+                                <button onclick="downloadEditionPDF(${data.id}, '${data.edition_number}', ${data.year})" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg">
+                                    <i class="fas fa-file-pdf mr-2"></i>Download PDF/HTML
+                                </button>
+                                <button onclick="window.open('/api/verification', '_blank')" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg">
+                                    <i class="fas fa-shield-alt mr-2"></i>Verificar Autenticidade
+                                </button>
+                            </div>
                         ` : ''}
                     </div>
                     
@@ -2422,27 +2454,48 @@ async function addMatterToEdition(editionId) {
             return;
         }
         
-        // Criar modal simples para seleção
-        const matterOptions = data.matters.map(m => 
-            `<option value="${m.id}">${m.title} (${m.secretaria_acronym})</option>`
-        ).join('');
+        // Criar modal com CHECKBOXES para seleção múltipla
+        const matterCheckboxes = data.matters.map(m => `
+            <div class="border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
+                <label class="flex items-start cursor-pointer">
+                    <input type="checkbox" value="${m.id}" class="matter-checkbox mt-1 mr-3 w-4 h-4">
+                    <div class="flex-1">
+                        <div class="font-semibold text-gray-800">${m.title}</div>
+                        <div class="text-sm text-gray-600">${m.secretaria_acronym} - ${m.matter_type_name || 'N/A'}</div>
+                    </div>
+                </label>
+            </div>
+        `).join('');
         
         const modal = document.createElement('div');
         modal.innerHTML = `
             <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" id="addMatterModal">
-                <div class="bg-white rounded-lg shadow-xl p-6 max-w-2xl w-full mx-4">
-                    <h3 class="text-xl font-bold text-gray-800 mb-4">Adicionar Matéria à Edição</h3>
+                <div class="bg-white rounded-lg shadow-xl p-6 max-w-3xl w-full mx-4 max-h-[90vh] flex flex-col">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4">
+                        <i class="fas fa-plus-circle text-blue-600 mr-2"></i>
+                        Adicionar Matérias à Edição
+                    </h3>
                     
-                    <select id="matterSelect" class="w-full px-4 py-2 border border-gray-300 rounded-lg mb-4" size="10">
-                        ${matterOptions}
-                    </select>
-                    
-                    <div class="flex justify-end space-x-2">
-                        <button onclick="closeAddMatterModal()" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg">
-                            Cancelar
+                    <div class="mb-4">
+                        <button onclick="toggleAllMatters(true)" class="text-sm text-blue-600 hover:text-blue-800 mr-3">
+                            <i class="fas fa-check-square mr-1"></i>Selecionar Todas
                         </button>
-                        <button onclick="confirmAddMatter(${editionId})" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
-                            Adicionar
+                        <button onclick="toggleAllMatters(false)" class="text-sm text-gray-600 hover:text-gray-800">
+                            <i class="fas fa-square mr-1"></i>Desmarcar Todas
+                        </button>
+                        <span id="selectedCount" class="ml-4 text-sm font-semibold text-gray-700">0 selecionadas</span>
+                    </div>
+                    
+                    <div class="flex-1 overflow-y-auto space-y-2 mb-4" style="max-height: 400px;">
+                        ${matterCheckboxes}
+                    </div>
+                    
+                    <div class="flex justify-end space-x-2 pt-4 border-t">
+                        <button onclick="closeAddMatterModal()" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg">
+                            <i class="fas fa-times mr-2"></i>Cancelar
+                        </button>
+                        <button onclick="confirmAddMatters(${editionId})" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                            <i class="fas fa-plus mr-2"></i>Adicionar Selecionadas
                         </button>
                     </div>
                 </div>
@@ -2451,8 +2504,33 @@ async function addMatterToEdition(editionId) {
         
         document.body.appendChild(modal);
         
+        // Adicionar event listeners para contar selecionados
+        document.querySelectorAll('.matter-checkbox').forEach(checkbox => {
+            checkbox.addEventListener('change', updateSelectedCount);
+        });
+        
+        updateSelectedCount();
+        
     } catch (error) {
         alert(error.response?.data?.error || 'Erro ao carregar matérias');
+    }
+}
+
+function toggleAllMatters(select) {
+    document.querySelectorAll('.matter-checkbox').forEach(checkbox => {
+        checkbox.checked = select;
+    });
+    updateSelectedCount();
+}
+
+function updateSelectedCount() {
+    const selected = document.querySelectorAll('.matter-checkbox:checked').length;
+    const counter = document.getElementById('selectedCount');
+    if (counter) {
+        counter.textContent = `${selected} selecionada${selected !== 1 ? 's' : ''}`;
+        counter.className = selected > 0 
+            ? 'ml-4 text-sm font-semibold text-blue-600' 
+            : 'ml-4 text-sm font-semibold text-gray-700';
     }
 }
 
@@ -2460,21 +2538,32 @@ function closeAddMatterModal() {
     document.getElementById('addMatterModal')?.remove();
 }
 
-async function confirmAddMatter(editionId) {
-    const matterId = document.getElementById('matterSelect').value;
+async function confirmAddMatters(editionId) {
+    const selectedCheckboxes = document.querySelectorAll('.matter-checkbox:checked');
     
-    if (!matterId) {
-        alert('Selecione uma matéria');
+    if (selectedCheckboxes.length === 0) {
+        alert('Selecione pelo menos uma matéria');
         return;
     }
     
+    const matterIds = Array.from(selectedCheckboxes).map(cb => parseInt(cb.value));
+    
     try {
-        await api.post(`/editions/${editionId}/add-matter`, { matter_id: parseInt(matterId) });
-        alert('Matéria adicionada com sucesso!');
+        const { data } = await api.post(`/editions/${editionId}/add-matters`, { matter_ids: matterIds });
+        
+        let message = `${data.results.added.length} matéria(s) adicionada(s) com sucesso!`;
+        if (data.results.skipped.length > 0) {
+            message += `\n\n${data.results.skipped.length} matéria(s) ignorada(s):\n`;
+            data.results.skipped.forEach(s => {
+                message += `• ID ${s.id}: ${s.reason}\n`;
+            });
+        }
+        
+        alert(message);
         closeAddMatterModal();
         viewEdition(editionId);
     } catch (error) {
-        alert(error.response?.data?.error || 'Erro ao adicionar matéria');
+        alert(error.response?.data?.error || 'Erro ao adicionar matérias');
     }
 }
 
@@ -2517,6 +2606,372 @@ async function deleteEdition(id) {
         loadView('editions');
     } catch (error) {
         alert(error.response?.data?.error || 'Erro ao excluir edição');
+    }
+}
+
+// ====================================
+// VERIFICAÇÃO DE AUTENTICIDADE
+// ====================================
+
+async function loadVerificationInterface(container) {
+    container.innerHTML = `
+        <div class="max-w-4xl mx-auto">
+            <div class="mb-6">
+                <h2 class="text-3xl font-bold text-gray-800 mb-2">
+                    <i class="fas fa-shield-alt text-purple-600 mr-3"></i>
+                    Verificação de Autenticidade
+                </h2>
+                <p class="text-gray-600">Verifique a autenticidade e integridade de edições e assinaturas eletrônicas do Diário Oficial</p>
+            </div>
+            
+            <!-- Verificar Edição -->
+            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                <h3 class="text-xl font-bold text-gray-800 mb-4">
+                    <i class="fas fa-book text-blue-600 mr-2"></i>
+                    Verificar Edição do Diário
+                </h3>
+                <p class="text-sm text-gray-600 mb-4">Informe o número e ano da edição, junto com o hash de validação para verificar a autenticidade.</p>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                    <input type="text" id="verifyEditionNumber" placeholder="Ex: 001/2025" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                    <input type="number" id="verifyEditionYear" placeholder="Ano (Ex: 2025)" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                    <input type="text" id="verifyEditionHash" placeholder="Hash de validação" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 md:col-span-3">
+                </div>
+                
+                <button onclick="verifyEdition()" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-3 rounded-lg transition">
+                    <i class="fas fa-check-circle mr-2"></i>Verificar Edição
+                </button>
+                
+                <div id="editionVerificationResult" class="mt-4"></div>
+            </div>
+            
+            <!-- Verificar Assinatura de Matéria -->
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h3 class="text-xl font-bold text-gray-800 mb-4">
+                    <i class="fas fa-signature text-green-600 mr-2"></i>
+                    Verificar Assinatura Eletrônica
+                </h3>
+                <p class="text-sm text-gray-600 mb-4">Informe o ID da matéria e o hash da assinatura para verificar a autenticidade.</p>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <input type="number" id="verifyMatterId" placeholder="ID da Matéria" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500">
+                    <input type="text" id="verifySignatureHash" placeholder="Hash da Assinatura" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500">
+                </div>
+                
+                <button onclick="verifyMatterSignature()" class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-3 rounded-lg transition">
+                    <i class="fas fa-check-circle mr-2"></i>Verificar Assinatura
+                </button>
+                
+                <div id="signatureVerificationResult" class="mt-4"></div>
+            </div>
+            
+            <!-- Como obter os hashes -->
+            <div class="bg-blue-50 border border-blue-200 rounded-lg p-6 mt-6">
+                <h4 class="font-bold text-blue-900 mb-2">
+                    <i class="fas fa-info-circle mr-2"></i>Como obter os hashes?
+                </h4>
+                <ul class="text-sm text-blue-800 space-y-1">
+                    <li><strong>Hash da Edição:</strong> Encontrado no rodapé do PDF publicado do Diário Oficial</li>
+                    <li><strong>Hash da Assinatura:</strong> Presente no cabeçalho de cada matéria publicada</li>
+                    <li><strong>ID da Matéria:</strong> Número de identificação único da matéria no sistema</li>
+                </ul>
+            </div>
+        </div>
+    `;
+}
+
+async function verifyEdition() {
+    const editionNumber = document.getElementById('verifyEditionNumber').value.trim();
+    const year = document.getElementById('verifyEditionYear').value;
+    const hash = document.getElementById('verifyEditionHash').value.trim();
+    const resultDiv = document.getElementById('editionVerificationResult');
+    
+    if (!editionNumber || !year || !hash) {
+        resultDiv.innerHTML = `
+            <div class="bg-red-100 border border-red-300 text-red-800 px-4 py-3 rounded-lg">
+                <i class="fas fa-exclamation-triangle mr-2"></i>
+                Preencha todos os campos
+            </div>
+        `;
+        return;
+    }
+    
+    resultDiv.innerHTML = `
+        <div class="bg-gray-100 border border-gray-300 text-gray-800 px-4 py-3 rounded-lg">
+            <i class="fas fa-spinner fa-spin mr-2"></i>Verificando...
+        </div>
+    `;
+    
+    try {
+        const { data } = await api.post('/verification/edition', {
+            edition_number: editionNumber,
+            year: parseInt(year),
+            hash: hash
+        });
+        
+        if (data.valid) {
+            resultDiv.innerHTML = `
+                <div class="bg-green-100 border border-green-300 text-green-800 px-4 py-3 rounded-lg">
+                    <div class="flex items-center mb-3">
+                        <i class="fas fa-check-circle text-2xl mr-3"></i>
+                        <div>
+                            <p class="font-bold text-lg">${data.message}</p>
+                            <p class="text-sm">Edição ${data.edition.edition_number} - ${data.edition.year}</p>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3 text-sm mt-3 pt-3 border-t border-green-200">
+                        <div>
+                            <p class="font-semibold">Data de Publicação:</p>
+                            <p>${new Date(data.edition.published_at).toLocaleString('pt-BR')}</p>
+                        </div>
+                        <div>
+                            <p class="font-semibold">Total de Matérias:</p>
+                            <p>${data.edition.matter_count}</p>
+                        </div>
+                        <div>
+                            <p class="font-semibold">Total de Páginas:</p>
+                            <p>${data.edition.total_pages}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else {
+            resultDiv.innerHTML = `
+                <div class="bg-red-100 border border-red-300 text-red-800 px-4 py-3 rounded-lg">
+                    <div class="flex items-center">
+                        <i class="fas fa-times-circle text-2xl mr-3"></i>
+                        <div>
+                            <p class="font-bold text-lg">${data.message}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+    } catch (error) {
+        resultDiv.innerHTML = `
+            <div class="bg-red-100 border border-red-300 text-red-800 px-4 py-3 rounded-lg">
+                <i class="fas fa-exclamation-triangle mr-2"></i>
+                ${error.response?.data?.error || 'Erro ao verificar edição'}
+            </div>
+        `;
+    }
+}
+
+async function verifyMatterSignature() {
+    const matterId = document.getElementById('verifyMatterId').value;
+    const signatureHash = document.getElementById('verifySignatureHash').value.trim();
+    const resultDiv = document.getElementById('signatureVerificationResult');
+    
+    if (!matterId || !signatureHash) {
+        resultDiv.innerHTML = `
+            <div class="bg-red-100 border border-red-300 text-red-800 px-4 py-3 rounded-lg">
+                <i class="fas fa-exclamation-triangle mr-2"></i>
+                Preencha todos os campos
+            </div>
+        `;
+        return;
+    }
+    
+    resultDiv.innerHTML = `
+        <div class="bg-gray-100 border border-gray-300 text-gray-800 px-4 py-3 rounded-lg">
+            <i class="fas fa-spinner fa-spin mr-2"></i>Verificando...
+        </div>
+    `;
+    
+    try {
+        const { data } = await api.post('/verification/matter-signature', {
+            matter_id: parseInt(matterId),
+            signature_hash: signatureHash
+        });
+        
+        if (data.valid) {
+            resultDiv.innerHTML = `
+                <div class="bg-green-100 border border-green-300 text-green-800 px-4 py-3 rounded-lg">
+                    <div class="flex items-center mb-3">
+                        <i class="fas fa-check-circle text-2xl mr-3"></i>
+                        <div>
+                            <p class="font-bold text-lg">${data.message}</p>
+                            <p class="text-sm">${data.matter.title}</p>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3 text-sm mt-3 pt-3 border-t border-green-200">
+                        <div>
+                            <p class="font-semibold">Tipo:</p>
+                            <p>${data.matter.matter_type}</p>
+                        </div>
+                        <div>
+                            <p class="font-semibold">Secretaria:</p>
+                            <p>${data.matter.secretaria}</p>
+                        </div>
+                        <div>
+                            <p class="font-semibold">Assinado por:</p>
+                            <p>${data.matter.signed_by}</p>
+                        </div>
+                        <div>
+                            <p class="font-semibold">Data:</p>
+                            <p>${new Date(data.matter.signed_at).toLocaleString('pt-BR')}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else {
+            resultDiv.innerHTML = `
+                <div class="bg-red-100 border border-red-300 text-red-800 px-4 py-3 rounded-lg">
+                    <div class="flex items-center">
+                        <i class="fas fa-times-circle text-2xl mr-3"></i>
+                        <div>
+                            <p class="font-bold text-lg">${data.message}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+    } catch (error) {
+        resultDiv.innerHTML = `
+            <div class="bg-red-100 border border-red-300 text-red-800 px-4 py-3 rounded-lg">
+                <i class="fas fa-exclamation-triangle mr-2"></i>
+                ${error.response?.data?.error || 'Erro ao verificar assinatura'}
+            </div>
+        `;
+    }
+}
+
+// ====================================
+// DOWNLOAD E EXPORTAÇÃO
+// ====================================
+
+async function downloadEditionPDF(editionId, editionNumber, year) {
+    try {
+        const response = await fetch(`/api/editions/${editionId}/pdf`, {
+            headers: {
+                'Authorization': `Bearer ${state.token}`
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error('Erro ao baixar PDF');
+        }
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `diario-oficial-${editionNumber.replace(/\//g, '-')}-${year}.html`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+    } catch (error) {
+        alert('Erro ao baixar PDF: ' + error.message);
+    }
+}
+
+async function exportMattersCSV() {
+    try {
+        const response = await fetch('/api/export/matters/csv', {
+            headers: {
+                'Authorization': `Bearer ${state.token}`
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error('Erro ao exportar CSV');
+        }
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `materias_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+    } catch (error) {
+        alert('Erro ao exportar CSV: ' + error.message);
+    }
+}
+
+async function exportMattersXLS() {
+    try {
+        const response = await fetch('/api/export/matters/xls', {
+            headers: {
+                'Authorization': `Bearer ${state.token}`
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error('Erro ao exportar XLS');
+        }
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `materias_${new Date().toISOString().split('T')[0]}.xls`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+    } catch (error) {
+        alert('Erro ao exportar XLS: ' + error.message);
+    }
+}
+
+async function exportEditionsCSV() {
+    try {
+        const response = await fetch('/api/export/editions/csv', {
+            headers: {
+                'Authorization': `Bearer ${state.token}`
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error('Erro ao exportar CSV');
+        }
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `edicoes_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+    } catch (error) {
+        alert('Erro ao exportar CSV: ' + error.message);
+    }
+}
+
+async function exportEditionsXLS() {
+    try {
+        const response = await fetch('/api/export/editions/xls', {
+            headers: {
+                'Authorization': `Bearer ${state.token}`
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error('Erro ao exportar XLS');
+        }
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `edicoes_${new Date().toISOString().split('T')[0]}.xls`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+    } catch (error) {
+        alert('Erro ao exportar XLS: ' + error.message);
     }
 }
 

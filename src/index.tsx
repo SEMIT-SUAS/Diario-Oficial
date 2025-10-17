@@ -15,6 +15,8 @@ import semad from './routes/semad';
 import matterTypes from './routes/matter-types';
 import editions from './routes/editions';
 import users from './routes/users';
+import verification from './routes/verification';
+import exportRoutes from './routes/export';
 
 const app = new Hono<HonoContext>();
 
@@ -31,6 +33,8 @@ app.route('/api/semad', semad);
 app.route('/api/matter-types', matterTypes);
 app.route('/api/editions', editions);
 app.route('/api/users', users);
+app.route('/api/verification', verification);
+app.route('/api/export', exportRoutes);
 
 // Health check
 app.get('/api/health', (c) => {
@@ -293,6 +297,10 @@ app.get('/', (c) => {
                         </div>
                         
                         <div id="adminMenu" class="hidden">
+                            <a href="#" data-view="verification" class="nav-link flex items-center px-4 py-3 text-gray-700 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition">
+                                <i class="fas fa-shield-alt w-6"></i>
+                                <span class="ml-3">Verificar Autenticidade</span>
+                            </a>
                             <a href="#" data-view="users" class="nav-link flex items-center px-4 py-3 text-gray-700 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition">
                                 <i class="fas fa-users w-6"></i>
                                 <span class="ml-3">Usuários</span>
