@@ -4,7 +4,7 @@
 
 import { Hono } from 'hono';
 import { HonoContext, Matter } from '../types';
-import { authMiddleware, requireRole, auditLog } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { generateMatterSignature } from '../utils/auth';
 
 const semad = new Hono<HonoContext>();
@@ -48,7 +48,7 @@ semad.get('/pending', async (c) => {
  * POST /api/semad/:id/review
  * Inicia análise de uma matéria
  */
-semad.post('/:id/review', auditLog('start_review', 'matter'), async (c) => {
+semad.post('/:id/review', async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -87,7 +87,7 @@ semad.post('/:id/review', auditLog('start_review', 'matter'), async (c) => {
  * POST /api/semad/:id/approve
  * Aprova matéria
  */
-semad.post('/:id/approve', auditLog('approve', 'matter'), async (c) => {
+semad.post('/:id/approve', async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -176,7 +176,7 @@ semad.post('/:id/approve', auditLog('approve', 'matter'), async (c) => {
  * POST /api/semad/:id/reject
  * Rejeita matéria e devolve para secretaria
  */
-semad.post('/:id/reject', auditLog('reject', 'matter'), async (c) => {
+semad.post('/:id/reject', async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -239,7 +239,7 @@ semad.post('/:id/reject', auditLog('reject', 'matter'), async (c) => {
  * POST /api/semad/:id/comment
  * Adiciona comentário/observação à matéria
  */
-semad.post('/:id/comment', auditLog('add_comment', 'matter'), async (c) => {
+semad.post('/:id/comment', async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');

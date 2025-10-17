@@ -4,7 +4,7 @@
 
 import { Hono } from 'hono';
 import { HonoContext, Matter, MatterStatus } from '../types';
-import { authMiddleware, requireRole, auditLog } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { generateMatterSignature } from '../utils/auth';
 import { getCurrentTimestamp } from '../utils/date';
 
@@ -189,7 +189,7 @@ matters.get('/:id', async (c) => {
  * POST /api/matters
  * Cria nova matéria (apenas Secretaria)
  */
-matters.post('/', requireRole('secretaria'), auditLog('create', 'matter'), async (c) => {
+matters.post('/', requireRole('secretaria'), async (c) => {
   try {
     const user = c.get('user');
     const { title, content, summary, matter_type, category_id, layout_columns = 1 } = await c.req.json();
@@ -222,6 +222,17 @@ matters.post('/', requireRole('secretaria'), auditLog('create', 'matter'), async
       .bind(result.meta.last_row_id, title, content, user.id)
       .run();
     
+    // Log de auditoria
+    const ipAddress = c.req.header('CF-Connecting-IP') || c.req.header('X-Real-IP') || 'unknown';
+    const userAgent = c.req.header('User-Agent') || 'unknown';
+    await c.env.DB
+      .prepare(`
+        INSERT INTO audit_logs (user_id, entity_type, entity_id, action, ip_address, user_agent, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      `)
+      .bind(user.id, 'matter', result.meta.last_row_id, 'create', ipAddress, userAgent)
+      .run();
+    
     return c.json({
       message: 'Matéria criada com sucesso',
       matterId: result.meta.last_row_id
@@ -237,7 +248,7 @@ matters.post('/', requireRole('secretaria'), auditLog('create', 'matter'), async
  * PUT /api/matters/:id
  * Atualiza matéria
  */
-matters.put('/:id', auditLog('update', 'matter'), async (c) => {
+matters.put('/:id', async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -297,7 +308,7 @@ matters.put('/:id', auditLog('update', 'matter'), async (c) => {
  * POST /api/matters/:id/submit
  * Envia matéria para análise SEMAD
  */
-matters.post('/:id/submit', requireRole('secretaria'), auditLog('submit', 'matter'), async (c) => {
+matters.post('/:id/submit', requireRole('secretaria'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
