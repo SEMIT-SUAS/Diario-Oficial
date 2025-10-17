@@ -648,3 +648,12 @@ Para dúvidas ou sugestões sobre o sistema, consulte a documentação ou entre 
 - ✅ Permissões ajustadas (admin/semad podem criar matérias)
 - ✅ Melhorias na exibição de metadados completos
 - ✅ API de tipos de matérias (CRUD completo)
+
+### v1.0.1 (2025-10-17)
+- 🐛 **CRÍTICO**: Corrigido erro `Type 'object' not supported for value '[object Promise]'` na publicação de edições
+- 🔧 `generateEditionHash()` agora é resolvido antes de gerar HTML
+- ✅ Sistema de publicação de edições 100% funcional
+- ✅ Geração de PDF com hash de validação operacional
+- ✅ Sistema pronto para produção
+
+**Impacto:** Publicação de edições do Diário Oficial funcionando completamente!
