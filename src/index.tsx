@@ -13,6 +13,7 @@ import auth from './routes/auth';
 import matters from './routes/matters';
 import semad from './routes/semad';
 import matterTypes from './routes/matter-types';
+import editions from './routes/editions';
 
 const app = new Hono<HonoContext>();
 
@@ -27,6 +28,7 @@ app.route('/api/auth', auth);
 app.route('/api/matters', matters);
 app.route('/api/semad', semad);
 app.route('/api/matter-types', matterTypes);
+app.route('/api/editions', editions);
 
 // Health check
 app.get('/api/health', (c) => {
@@ -208,6 +210,13 @@ app.get('/', (c) => {
                             <i class="fas fa-search w-6"></i>
                             <span class="ml-3">Pesquisar</span>
                         </a>
+                        
+                        <div id="semadAdminMenu" class="hidden">
+                            <a href="#" data-view="editions" class="nav-link flex items-center px-4 py-3 text-gray-700 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition">
+                                <i class="fas fa-book w-6"></i>
+                                <span class="ml-3">Edições do Diário</span>
+                            </a>
+                        </div>
                         
                         <div id="adminMenu" class="hidden">
                             <a href="#" data-view="users" class="nav-link flex items-center px-4 py-3 text-gray-700 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition">

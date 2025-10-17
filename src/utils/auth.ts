@@ -24,6 +24,14 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 }
 
 /**
+ * Gera hash genérico de uma string (alias para hashPassword)
+ * Usado para gerar hashes de validação, assinaturas, etc.
+ */
+export async function generateHash(content: string): Promise<string> {
+  return hashPassword(content);
+}
+
+/**
  * Gera token JWT simples (sem biblioteca externa)
  * Em produção, considere usar biblioteca específica
  */

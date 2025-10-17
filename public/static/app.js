@@ -142,6 +142,7 @@ async function showDashboard() {
         // Limpar todos os menus primeiro (corrige bug de persistência)
         document.getElementById('secretariaMenu').classList.add('hidden');
         document.getElementById('semadMenu').classList.add('hidden');
+        document.getElementById('semadAdminMenu').classList.add('hidden');
         document.getElementById('adminMenu').classList.add('hidden');
         
         // Update UI with user info
@@ -154,6 +155,7 @@ async function showDashboard() {
         }
         if (state.user.role === 'semad' || state.user.role === 'admin') {
             document.getElementById('semadMenu').classList.remove('hidden');
+            document.getElementById('semadAdminMenu').classList.remove('hidden');
         }
         if (state.user.role === 'admin') {
             document.getElementById('adminMenu').classList.remove('hidden');
@@ -292,6 +294,9 @@ async function loadView(view) {
                 break;
             case 'search':
                 loadPublicSearch(content);
+                break;
+            case 'editions':
+                await loadEditions(content);
                 break;
             case 'users':
                 loadUsersManagement(content);
@@ -1371,19 +1376,203 @@ async function loadApprovedMatters(container) {
 // PUBLIC SEARCH
 // ====================================
 
-function loadPublicSearch(container) {
+async function loadPublicSearch(container) {
+    const matterTypesOptions = state.matterTypes.map(mt => 
+        `<option value="${mt.id}">${mt.name}</option>`
+    ).join('');
+    
     container.innerHTML = `
-        <h2 class="text-2xl font-bold text-gray-800 mb-6">
+        <h2 class="text-2xl font-bold text-purple-700 mb-6">
             <i class="fas fa-search mr-2"></i>Pesquisa de Publicações
+            <span class="text-sm bg-purple-100 text-purple-800 px-3 py-1 rounded-full ml-2">Público</span>
         </h2>
         
-        <div class="bg-white rounded-lg shadow p-6">
-            <p class="text-gray-600">
-                <i class="fas fa-info-circle mr-2"></i>
-                Módulo de pesquisa pública em desenvolvimento
-            </p>
+        <div class="bg-white rounded-lg shadow p-6 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <input 
+                    type="text" 
+                    id="searchPublicText"
+                    class="px-4 py-2 border border-gray-300 rounded-lg"
+                    placeholder="Buscar por título ou conteúdo..."
+                >
+                <select 
+                    id="searchPublicType"
+                    class="px-4 py-2 border border-gray-300 rounded-lg"
+                >
+                    <option value="">Todos os tipos</option>
+                    ${matterTypesOptions}
+                </select>
+                <input 
+                    type="date" 
+                    id="searchPublicDateFrom"
+                    class="px-4 py-2 border border-gray-300 rounded-lg"
+                    placeholder="Data inicial"
+                >
+                <input 
+                    type="date" 
+                    id="searchPublicDateTo"
+                    class="px-4 py-2 border border-gray-300 rounded-lg"
+                    placeholder="Data final"
+                >
+            </div>
+            <div class="flex gap-2">
+                <button 
+                    onclick="performPublicSearch()"
+                    class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg flex-1"
+                >
+                    <i class="fas fa-search mr-2"></i>Buscar
+                </button>
+                <button 
+                    onclick="clearPublicSearch()"
+                    class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-6 py-2 rounded-lg"
+                >
+                    <i class="fas fa-times mr-2"></i>Limpar
+                </button>
+            </div>
         </div>
+        
+        <div id="publicSearchResults"></div>
     `;
+}
+
+async function performPublicSearch() {
+    const text = document.getElementById('searchPublicText').value;
+    const type = document.getElementById('searchPublicType').value;
+    const dateFrom = document.getElementById('searchPublicDateFrom').value;
+    const dateTo = document.getElementById('searchPublicDateTo').value;
+    
+    try {
+        const params = new URLSearchParams();
+        if (text) params.append('search', text);
+        if (type) params.append('matter_type_id', type);
+        if (dateFrom) params.append('date_from', dateFrom);
+        if (dateTo) params.append('date_to', dateTo);
+        params.append('status', 'published');
+        
+        const { data } = await api.get(`/matters?${params.toString()}`);
+        
+        const resultsDiv = document.getElementById('publicSearchResults');
+        
+        if (data.matters.length === 0) {
+            resultsDiv.innerHTML = `
+                <div class="bg-white rounded-lg shadow p-8 text-center text-gray-500">
+                    <i class="fas fa-inbox text-4xl mb-4"></i>
+                    <p>Nenhuma publicação encontrada</p>
+                </div>
+            `;
+            return;
+        }
+        
+        resultsDiv.innerHTML = `
+            <div class="bg-white rounded-lg shadow">
+                <div class="p-4 border-b bg-gray-50">
+                    <p class="text-sm text-gray-600">
+                        <i class="fas fa-check-circle mr-2 text-green-600"></i>
+                        Encontradas ${data.matters.length} publicação(ões)
+                    </p>
+                </div>
+                <div class="divide-y divide-gray-200">
+                    ${data.matters.map(matter => {
+                        const matterTypeName = state.matterTypes.find(mt => mt.id === matter.matter_type_id)?.name || 'Sem tipo';
+                        return `
+                        <div class="p-4 hover:bg-gray-50">
+                            <div class="flex justify-between items-start">
+                                <div class="flex-1">
+                                    <h3 class="font-semibold text-gray-800">${matter.title}</h3>
+                                    <p class="text-sm text-purple-600 mt-1">${matterTypeName}</p>
+                                    <p class="text-sm text-gray-500 mt-1">
+                                        ${matter.secretaria_acronym || matter.secretaria_name}
+                                    </p>
+                                    <p class="text-xs text-gray-400 mt-2">
+                                        Publicado em: ${formatDate(matter.published_at)}
+                                    </p>
+                                </div>
+                                <button 
+                                    onclick="viewPublicMatter(${matter.id})"
+                                    class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm ml-4"
+                                >
+                                    <i class="fas fa-eye mr-2"></i>Ver
+                                </button>
+                            </div>
+                        </div>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+    } catch (error) {
+        alert('Erro ao buscar publicações: ' + (error.response?.data?.error || error.message));
+    }
+}
+
+function clearPublicSearch() {
+    document.getElementById('searchPublicText').value = '';
+    document.getElementById('searchPublicType').value = '';
+    document.getElementById('searchPublicDateFrom').value = '';
+    document.getElementById('searchPublicDateTo').value = '';
+    document.getElementById('publicSearchResults').innerHTML = '';
+}
+
+async function viewPublicMatter(id) {
+    try {
+        const { data } = await api.get(`/matters/${id}`);
+        const matter = data.matter;
+        const matterTypeName = state.matterTypes.find(mt => mt.id === matter.matter_type_id)?.name || 'Sem tipo';
+        
+        document.getElementById('publicSearchResults').innerHTML = `
+            <div class="bg-white rounded-lg shadow p-6">
+                <button 
+                    onclick="loadView('publicSearch')"
+                    class="text-purple-600 hover:text-purple-800 mb-4"
+                >
+                    <i class="fas fa-arrow-left mr-2"></i>Voltar aos resultados
+                </button>
+                
+                <div class="mb-4">
+                    <h2 class="text-2xl font-bold text-gray-800">${matter.title}</h2>
+                    <p class="text-purple-600 mt-2">${matterTypeName}</p>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4 mb-6 pb-6 border-b">
+                    <div>
+                        <p class="text-sm text-gray-500">Secretaria</p>
+                        <p class="font-medium">${matter.secretaria_name}</p>
+                    </div>
+                    <div>
+                        <p class="text-sm text-gray-500">Publicado em</p>
+                        <p class="font-medium">${formatDate(matter.published_at)}</p>
+                    </div>
+                </div>
+                
+                ${matter.summary ? `
+                    <div class="mb-6">
+                        <h3 class="text-lg font-semibold text-gray-800 mb-3">Resumo</h3>
+                        <div class="bg-gray-50 p-4 rounded-lg">${matter.summary}</div>
+                    </div>
+                ` : ''}
+                
+                <div class="mb-6">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-3">Conteúdo</h3>
+                    <div class="bg-gray-50 p-4 rounded-lg whitespace-pre-wrap">${matter.content}</div>
+                </div>
+                
+                ${matter.signature_hash ? `
+                    <div class="p-4 bg-green-50 border border-green-200 rounded-lg">
+                        <h3 class="text-lg font-semibold text-green-800 mb-2">
+                            <i class="fas fa-shield-alt mr-2"></i>Assinatura Eletrônica
+                        </h3>
+                        <p class="text-sm text-gray-600 mb-2">Assinado por: ${matter.signed_by_name || 'Sistema'}</p>
+                        <p class="text-xs text-gray-500 mb-2">Data: ${formatDate(matter.signed_at)}</p>
+                        <p class="text-xs font-mono bg-white p-2 rounded border border-green-200 break-all">
+                            ${matter.signature_hash}
+                        </p>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    } catch (error) {
+        alert('Erro ao carregar matéria: ' + error.message);
+    }
 }
 
 // ====================================
@@ -1489,6 +1678,407 @@ function formatDate(dateString) {
     if (!dateString) return '-';
     const date = new Date(dateString);
     return date.toLocaleDateString('pt-BR') + ' ' + date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+// ====================================
+// EDITIONS MANAGEMENT
+// ====================================
+
+async function loadEditions(container) {
+    try {
+        const { data } = await api.get('/editions');
+        
+        container.innerHTML = `
+            <div class="mb-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-800">
+                        <i class="fas fa-book mr-2"></i>Edições do Diário Oficial
+                    </h2>
+                    ${state.user.role === 'admin' || state.user.role === 'semad' ? `
+                        <button onclick="showNewEditionModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition">
+                            <i class="fas fa-plus mr-2"></i>Nova Edição
+                        </button>
+                    ` : ''}
+                </div>
+                
+                <div class="bg-white rounded-lg shadow overflow-hidden">
+                    <div class="p-4 border-b border-gray-200 bg-gray-50">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <select id="filterEditionStatus" onchange="filterEditions()" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                                <option value="">Todos os status</option>
+                                <option value="draft">Rascunho</option>
+                                <option value="published">Publicado</option>
+                                <option value="archived">Arquivado</option>
+                            </select>
+                            
+                            <input type="number" id="filterEditionYear" placeholder="Filtrar por ano" onchange="filterEditions()" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            
+                            <button onclick="clearEditionFilters()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold px-4 py-2 rounded-lg transition">
+                                <i class="fas fa-times mr-2"></i>Limpar filtros
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div id="editionsTableContainer">
+                        ${renderEditionsTable(data.editions)}
+                    </div>
+                </div>
+            </div>
+        `;
+        
+    } catch (error) {
+        console.error('Error loading editions:', error);
+        container.innerHTML = `<p class="text-red-600">Erro ao carregar edições: ${error.message}</p>`;
+    }
+}
+
+function renderEditionsTable(editions) {
+    if (!editions || editions.length === 0) {
+        return `
+            <div class="p-8 text-center text-gray-500">
+                <i class="fas fa-book text-4xl mb-4"></i>
+                <p>Nenhuma edição encontrada</p>
+            </div>
+        `;
+    }
+    
+    return `
+        <table class="w-full">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nº Edição</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ano</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Matérias</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+                ${editions.map(edition => `
+                    <tr class="hover:bg-gray-50 edition-row" data-status="${edition.status}" data-year="${edition.year}">
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="font-semibold text-gray-900">${edition.edition_number}</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-gray-700">
+                            ${new Date(edition.edition_date).toLocaleDateString('pt-BR')}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-gray-700">
+                            ${edition.year}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium">
+                                ${edition.matter_count || 0} matéria(s)
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="${getEditionStatusColor(edition.status)} px-3 py-1 rounded-full text-sm font-medium">
+                                ${getEditionStatusName(edition.status)}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                            <button onclick="viewEdition(${edition.id})" class="text-blue-600 hover:text-blue-900" title="Ver detalhes">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                            ${edition.status === 'draft' && (state.user.role === 'admin' || state.user.role === 'semad') ? `
+                                <button onclick="editEdition(${edition.id})" class="text-green-600 hover:text-green-900" title="Editar">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button onclick="publishEdition(${edition.id})" class="text-purple-600 hover:text-purple-900" title="Publicar">
+                                    <i class="fas fa-rocket"></i>
+                                </button>
+                                <button onclick="deleteEdition(${edition.id})" class="text-red-600 hover:text-red-900" title="Excluir">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            ` : ''}
+                            ${edition.status === 'published' && edition.pdf_url ? `
+                                <a href="${edition.pdf_url}" target="_blank" class="text-indigo-600 hover:text-indigo-900" title="Download PDF">
+                                    <i class="fas fa-file-pdf"></i>
+                                </a>
+                            ` : ''}
+                        </td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+function getEditionStatusName(status) {
+    const statuses = {
+        draft: 'Rascunho',
+        published: 'Publicado',
+        archived: 'Arquivado'
+    };
+    return statuses[status] || status;
+}
+
+function getEditionStatusColor(status) {
+    const colors = {
+        draft: 'bg-gray-100 text-gray-800',
+        published: 'bg-green-100 text-green-800',
+        archived: 'bg-yellow-100 text-yellow-800'
+    };
+    return colors[status] || 'bg-gray-100 text-gray-800';
+}
+
+function filterEditions() {
+    const statusFilter = document.getElementById('filterEditionStatus').value;
+    const yearFilter = document.getElementById('filterEditionYear').value;
+    
+    const rows = document.querySelectorAll('.edition-row');
+    rows.forEach(row => {
+        const matchesStatus = !statusFilter || row.dataset.status === statusFilter;
+        const matchesYear = !yearFilter || row.dataset.year === yearFilter;
+        
+        row.style.display = (matchesStatus && matchesYear) ? '' : 'none';
+    });
+}
+
+function clearEditionFilters() {
+    document.getElementById('filterEditionStatus').value = '';
+    document.getElementById('filterEditionYear').value = '';
+    filterEditions();
+}
+
+async function showNewEditionModal() {
+    const editionNumber = prompt('Número da edição (ex: 001/2025):');
+    if (!editionNumber) return;
+    
+    const editionDate = prompt('Data da edição (YYYY-MM-DD):');
+    if (!editionDate) return;
+    
+    const year = new Date(editionDate).getFullYear();
+    
+    try {
+        await api.post('/editions', { edition_number: editionNumber, edition_date: editionDate, year });
+        alert('Edição criada com sucesso!');
+        loadView('editions');
+    } catch (error) {
+        alert(error.response?.data?.error || 'Erro ao criar edição');
+    }
+}
+
+async function viewEdition(id) {
+    try {
+        const { data } = await api.get(`/editions/${id}`);
+        
+        const container = document.getElementById('mainContent');
+        container.innerHTML = `
+            <div class="mb-6">
+                <button onclick="loadView('editions')" class="text-blue-600 hover:text-blue-800 mb-4">
+                    <i class="fas fa-arrow-left mr-2"></i>Voltar para Edições
+                </button>
+                
+                <div class="bg-white rounded-lg shadow-lg p-6">
+                    <div class="flex justify-between items-start mb-6">
+                        <div>
+                            <h2 class="text-3xl font-bold text-gray-800 mb-2">
+                                Edição ${data.edition_number}
+                            </h2>
+                            <p class="text-gray-600">Data: ${new Date(data.edition_date).toLocaleDateString('pt-BR')} • Ano: ${data.year}</p>
+                            <span class="${getEditionStatusColor(data.status)} px-3 py-1 rounded-full text-sm font-medium mt-2 inline-block">
+                                ${getEditionStatusName(data.status)}
+                            </span>
+                        </div>
+                        
+                        ${data.status === 'draft' && (state.user.role === 'admin' || state.user.role === 'semad') ? `
+                            <div class="space-x-2">
+                                <button onclick="addMatterToEdition(${data.id})" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                                    <i class="fas fa-plus mr-2"></i>Adicionar Matéria
+                                </button>
+                                <button onclick="publishEdition(${data.id})" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg">
+                                    <i class="fas fa-rocket mr-2"></i>Publicar Edição
+                                </button>
+                            </div>
+                        ` : ''}
+                        
+                        ${data.status === 'published' && data.pdf_url ? `
+                            <a href="${data.pdf_url}" target="_blank" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg inline-block">
+                                <i class="fas fa-file-pdf mr-2"></i>Download PDF
+                            </a>
+                        ` : ''}
+                    </div>
+                    
+                    <div class="border-t pt-6">
+                        <h3 class="text-xl font-bold text-gray-800 mb-4">
+                            Matérias da Edição (${data.matters.length})
+                        </h3>
+                        
+                        ${data.matters.length === 0 ? `
+                            <div class="text-center py-8 text-gray-500">
+                                <i class="fas fa-inbox text-4xl mb-4"></i>
+                                <p>Nenhuma matéria adicionada ainda</p>
+                            </div>
+                        ` : `
+                            <div class="space-y-4">
+                                ${data.matters.map(matter => `
+                                    <div class="border border-gray-200 rounded-lg p-4 hover:bg-gray-50">
+                                        <div class="flex justify-between items-start">
+                                            <div class="flex-1">
+                                                <div class="flex items-center gap-2 mb-2">
+                                                    <span class="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-medium">
+                                                        Ordem: ${matter.display_order}
+                                                    </span>
+                                                    <span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-medium">
+                                                        ${matter.secretaria_acronym}
+                                                    </span>
+                                                </div>
+                                                <h4 class="font-semibold text-gray-900 mb-1">${matter.title}</h4>
+                                                ${matter.summary ? `<p class="text-sm text-gray-600 mb-2">${matter.summary}</p>` : ''}
+                                                <p class="text-xs text-gray-500">Autor: ${matter.author_name}</p>
+                                            </div>
+                                            
+                                            ${data.status === 'draft' && (state.user.role === 'admin' || state.user.role === 'semad') ? `
+                                                <button onclick="removeMatterFromEdition(${data.id}, ${matter.id})" class="text-red-600 hover:text-red-900 ml-4">
+                                                    <i class="fas fa-times"></i>
+                                                </button>
+                                            ` : ''}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        `}
+                    </div>
+                    
+                    ${data.status === 'published' ? `
+                        <div class="border-t mt-6 pt-6">
+                            <h3 class="text-xl font-bold text-gray-800 mb-4">Informações de Publicação</h3>
+                            <div class="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <p class="text-gray-600">Publicado por:</p>
+                                    <p class="font-semibold">${data.published_by_name || '-'}</p>
+                                </div>
+                                <div>
+                                    <p class="text-gray-600">Data de Publicação:</p>
+                                    <p class="font-semibold">${formatDate(data.published_at)}</p>
+                                </div>
+                                <div>
+                                    <p class="text-gray-600">Total de páginas:</p>
+                                    <p class="font-semibold">${data.total_pages || '-'}</p>
+                                </div>
+                                <div>
+                                    <p class="text-gray-600">Hash de validação:</p>
+                                    <p class="font-mono text-xs">${data.pdf_hash ? data.pdf_hash.substring(0, 16) + '...' : '-'}</p>
+                                </div>
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+        
+    } catch (error) {
+        alert(error.response?.data?.error || 'Erro ao carregar edição');
+    }
+}
+
+async function addMatterToEdition(editionId) {
+    try {
+        // Buscar matérias aprovadas disponíveis
+        const { data } = await api.get('/matters?status=approved');
+        
+        if (data.matters.length === 0) {
+            alert('Não há matérias aprovadas disponíveis para adicionar à edição.');
+            return;
+        }
+        
+        // Criar modal simples para seleção
+        const matterOptions = data.matters.map(m => 
+            `<option value="${m.id}">${m.title} (${m.secretaria_acronym})</option>`
+        ).join('');
+        
+        const modal = document.createElement('div');
+        modal.innerHTML = `
+            <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" id="addMatterModal">
+                <div class="bg-white rounded-lg shadow-xl p-6 max-w-2xl w-full mx-4">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4">Adicionar Matéria à Edição</h3>
+                    
+                    <select id="matterSelect" class="w-full px-4 py-2 border border-gray-300 rounded-lg mb-4" size="10">
+                        ${matterOptions}
+                    </select>
+                    
+                    <div class="flex justify-end space-x-2">
+                        <button onclick="closeAddMatterModal()" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg">
+                            Cancelar
+                        </button>
+                        <button onclick="confirmAddMatter(${editionId})" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                            Adicionar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+    } catch (error) {
+        alert(error.response?.data?.error || 'Erro ao carregar matérias');
+    }
+}
+
+function closeAddMatterModal() {
+    document.getElementById('addMatterModal')?.remove();
+}
+
+async function confirmAddMatter(editionId) {
+    const matterId = document.getElementById('matterSelect').value;
+    
+    if (!matterId) {
+        alert('Selecione uma matéria');
+        return;
+    }
+    
+    try {
+        await api.post(`/editions/${editionId}/add-matter`, { matter_id: parseInt(matterId) });
+        alert('Matéria adicionada com sucesso!');
+        closeAddMatterModal();
+        viewEdition(editionId);
+    } catch (error) {
+        alert(error.response?.data?.error || 'Erro ao adicionar matéria');
+    }
+}
+
+async function removeMatterFromEdition(editionId, matterId) {
+    if (!confirm('Tem certeza que deseja remover esta matéria da edição?')) {
+        return;
+    }
+    
+    try {
+        await api.delete(`/editions/${editionId}/remove-matter/${matterId}`);
+        alert('Matéria removida com sucesso!');
+        viewEdition(editionId);
+    } catch (error) {
+        alert(error.response?.data?.error || 'Erro ao remover matéria');
+    }
+}
+
+async function publishEdition(id) {
+    if (!confirm('Tem certeza que deseja PUBLICAR esta edição?\n\nApós a publicação, não será possível adicionar ou remover matérias.\n\nEsta ação irá:\n• Gerar o PDF da edição\n• Publicar todas as matérias\n• Disponibilizar no portal público')) {
+        return;
+    }
+    
+    try {
+        const { data } = await api.post(`/editions/${id}/publish`);
+        alert(`Edição publicada com sucesso!\n\nPDF gerado: ${data.total_pages} página(s)\nHash: ${data.pdf_hash.substring(0, 16)}...`);
+        loadView('editions');
+    } catch (error) {
+        alert(error.response?.data?.error || 'Erro ao publicar edição');
+    }
+}
+
+async function deleteEdition(id) {
+    if (!confirm('Tem certeza que deseja EXCLUIR esta edição?\n\nAPENAS edições em rascunho podem ser excluídas.\n\nEsta ação não pode ser desfeita!')) {
+        return;
+    }
+    
+    try {
+        await api.delete(`/editions/${id}`);
+        alert('Edição excluída com sucesso!');
+        loadView('editions');
+    } catch (error) {
+        alert(error.response?.data?.error || 'Erro ao excluir edição');
+    }
 }
 
 // ====================================
