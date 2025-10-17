@@ -12,6 +12,7 @@ import { HonoContext } from './types';
 import auth from './routes/auth';
 import matters from './routes/matters';
 import semad from './routes/semad';
+import matterTypes from './routes/matter-types';
 
 const app = new Hono<HonoContext>();
 
@@ -25,6 +26,7 @@ app.use('/static/*', serveStatic({ root: './public' }));
 app.route('/api/auth', auth);
 app.route('/api/matters', matters);
 app.route('/api/semad', semad);
+app.route('/api/matter-types', matterTypes);
 
 // Health check
 app.get('/api/health', (c) => {

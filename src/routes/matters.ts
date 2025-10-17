@@ -39,6 +39,8 @@ matters.get('/', async (c) => {
     const params: any[] = [];
     
     // Filtro por role do usuário
+    // Admin e SEMAD veem todas as matérias
+    // Secretaria vê apenas suas matérias
     if (user.role === 'secretaria') {
       query += ` AND m.secretaria_id = ?`;
       params.push(user.secretaria_id);
@@ -187,29 +189,37 @@ matters.get('/:id', async (c) => {
 
 /**
  * POST /api/matters
- * Cria nova matéria (apenas Secretaria)
+ * Cria nova matéria (Secretaria, SEMAD, Admin)
  */
-matters.post('/', requireRole('secretaria'), async (c) => {
+matters.post('/', requireRole('secretaria', 'semad', 'admin'), async (c) => {
   try {
     const user = c.get('user');
-    const { title, content, summary, matter_type, category_id, layout_columns = 1 } = await c.req.json();
+    const { 
+      title, content, summary, matter_type_id, category_id, 
+      layout_columns = 1, priority = 'normal', publication_date, observations 
+    } = await c.req.json();
     
-    if (!title || !content || !matter_type) {
+    if (!title || !content || !matter_type_id) {
       return c.json({ error: 'Dados obrigatórios faltando' }, 400);
     }
+    
+    // Se usuário não tem secretaria (admin/semad), usar secretaria padrão ou permitir escolha
+    const secretaria_id = user.secretaria_id || 1;
     
     const result = await c.env.DB
       .prepare(`
         INSERT INTO matters (
-          title, content, summary, matter_type, category_id, 
+          title, content, summary, matter_type_id, category_id, 
           secretaria_id, author_id, status, version, layout_columns,
+          priority, publication_date, observations, server_timestamp,
           created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?, datetime('now'), datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
       `)
       .bind(
-        title, content, summary || null, matter_type, category_id || null,
-        user.secretaria_id, user.id, layout_columns
+        title, content, summary || null, matter_type_id, category_id || null,
+        secretaria_id, user.id, layout_columns, priority, 
+        publication_date || null, observations || null
       )
       .run();
     
@@ -308,7 +318,7 @@ matters.put('/:id', async (c) => {
  * POST /api/matters/:id/submit
  * Envia matéria para análise SEMAD
  */
-matters.post('/:id/submit', requireRole('secretaria'), async (c) => {
+matters.post('/:id/submit', requireRole('secretaria', 'semad', 'admin'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -322,7 +332,8 @@ matters.post('/:id/submit', requireRole('secretaria'), async (c) => {
       return c.json({ error: 'Matéria não encontrada' }, 404);
     }
     
-    if (matter.secretaria_id !== user.secretaria_id) {
+    // Verificar permissão (secretaria só pode enviar suas matérias)
+    if (user.role === 'secretaria' && matter.secretaria_id !== user.secretaria_id) {
       return c.json({ error: 'Acesso negado' }, 403);
     }
     
@@ -330,13 +341,52 @@ matters.post('/:id/submit', requireRole('secretaria'), async (c) => {
       return c.json({ error: 'Apenas matérias em rascunho podem ser enviadas' }, 400);
     }
     
+    // Verificar horário de envio
+    const now = new Date();
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    const currentTime = hour * 60 + minute;
+    
+    // Horários: até 15h ou entre 18h e 23:59h
+    const cutoff1 = 15 * 60; // 15:00
+    const cutoff2Start = 18 * 60; // 18:00
+    const cutoff2End = 24 * 60; // 00:00
+    
+    if (currentTime > cutoff1 && currentTime < cutoff2Start) {
+      return c.json({ 
+        error: 'Fora do horário de envio. Envios permitidos até 15h ou após 18h.' 
+      }, 400);
+    }
+    
+    // Verificar se é feriado
+    const today = now.toISOString().split('T')[0];
+    const holiday = await c.env.DB
+      .prepare('SELECT * FROM holidays WHERE date = ? AND active = 1')
+      .bind(today)
+      .first();
+    
+    if (holiday) {
+      return c.json({ 
+        error: `Não é possível enviar matérias em feriados. Hoje é: ${holiday.name}` 
+      }, 400);
+    }
+    
+    // Verificar se é final de semana
+    const dayOfWeek = now.getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      return c.json({ 
+        error: 'Não é possível enviar matérias aos finais de semana.' 
+      }, 400);
+    }
+    
     await c.env.DB
       .prepare(`
         UPDATE matters 
-        SET status = 'submitted', submitted_at = datetime('now'), updated_at = datetime('now')
+        SET status = 'submitted', submitted_at = datetime('now'), submitted_by = ?, 
+            server_timestamp = datetime('now'), updated_at = datetime('now')
         WHERE id = ?
       `)
-      .bind(id)
+      .bind(user.id, id)
       .run();
     
     // Criar notificação para SEMAD
@@ -372,10 +422,15 @@ matters.post('/:id/submit', requireRole('secretaria'), async (c) => {
  * POST /api/matters/:id/cancel
  * Cancela envio e volta matéria para rascunho
  */
-matters.post('/:id/cancel', requireRole('secretaria'), async (c) => {
+matters.post('/:id/cancel', requireRole('secretaria', 'semad', 'admin'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
+    const { cancelation_reason } = await c.req.json();
+    
+    if (!cancelation_reason) {
+      return c.json({ error: 'Motivo do cancelamento é obrigatório' }, 400);
+    }
     
     const matter = await c.env.DB
       .prepare('SELECT * FROM matters WHERE id = ?')
@@ -386,7 +441,7 @@ matters.post('/:id/cancel', requireRole('secretaria'), async (c) => {
       return c.json({ error: 'Matéria não encontrada' }, 404);
     }
     
-    if (matter.secretaria_id !== user.secretaria_id) {
+    if (user.role === 'secretaria' && matter.secretaria_id !== user.secretaria_id) {
       return c.json({ error: 'Acesso negado' }, 403);
     }
     
@@ -397,10 +452,24 @@ matters.post('/:id/cancel', requireRole('secretaria'), async (c) => {
     await c.env.DB
       .prepare(`
         UPDATE matters 
-        SET status = 'draft', submitted_at = NULL, reviewer_id = NULL, reviewed_at = NULL, updated_at = datetime('now')
+        SET status = 'draft', submitted_at = NULL, submitted_by = NULL,
+            reviewer_id = NULL, reviewed_at = NULL, 
+            canceled_at = datetime('now'), canceled_by = ?, cancelation_reason = ?,
+            updated_at = datetime('now')
         WHERE id = ?
       `)
-      .bind(id)
+      .bind(user.id, cancelation_reason, id)
+      .run();
+    
+    // Log de auditoria
+    const ipAddress = c.req.header('CF-Connecting-IP') || c.req.header('X-Real-IP') || 'unknown';
+    const userAgent = c.req.header('User-Agent') || 'unknown';
+    await c.env.DB
+      .prepare(`
+        INSERT INTO audit_logs (user_id, entity_type, entity_id, action, ip_address, user_agent, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      `)
+      .bind(user.id, 'matter', id, 'cancel_submission', ipAddress, userAgent)
       .run();
     
     return c.json({ message: 'Envio cancelado. Matéria voltou para rascunho.' });

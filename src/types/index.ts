@@ -62,19 +62,35 @@ export interface Category {
   created_at: string;
 }
 
+export interface MatterType {
+  id: number;
+  name: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  active: number;
+  order_position: number;
+  created_at: string;
+}
+
 export interface Matter {
   id: number;
   title: string;
   content: string;
   summary?: string;
   matter_type: string;
+  matter_type_id?: number;
   category_id?: number;
   secretaria_id: number;
   author_id: number;
   status: MatterStatus;
   version: number;
   parent_matter_id?: number;
+  priority: 'urgent' | 'high' | 'normal' | 'low';
+  publication_date?: string;
+  observations?: string;
   submitted_at?: string;
+  submitted_by?: number;
   reviewed_at?: string;
   approved_at?: string;
   published_at?: string;
@@ -82,10 +98,14 @@ export interface Matter {
   reviewer_id?: number;
   review_notes?: string;
   rejection_reason?: string;
+  canceled_at?: string;
+  canceled_by?: number;
+  cancelation_reason?: string;
   signature_hash?: string;
   signature_type?: SignatureType;
   signed_by?: number;
   signed_at?: string;
+  server_timestamp?: string;
   edition_number?: string;
   page_number?: number;
   pdf_url?: string;
