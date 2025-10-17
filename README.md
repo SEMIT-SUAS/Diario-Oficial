@@ -657,3 +657,27 @@ Para dúvidas ou sugestões sobre o sistema, consulte a documentação ou entre 
 - ✅ Sistema pronto para produção
 
 **Impacto:** Publicação de edições do Diário Oficial funcionando completamente!
+
+### v1.0.2 (2025-10-17)
+- ✅ **Módulo de Verificação de Autenticidade** implementado
+  - Interface completa para validar hash de edições
+  - Verificação de assinaturas eletrônicas de matérias
+  - 3 novos endpoints: `/api/verification/*`
+  - Menu dedicado com instruções de uso
+- ✅ **Seleção Múltipla de Matérias** - adicionar várias matérias de uma vez à edição
+  - Checkboxes com "Selecionar Todas" e "Desmarcar Todas"
+  - Contador de matérias selecionadas em tempo real
+  - Endpoint: `POST /api/editions/:id/add-matters`
+  - Relatório de matérias adicionadas/ignoradas
+- ✅ **Download Real de PDF/HTML** - baixa arquivo localmente (sem R2 mock)
+  - Endpoint: `GET /api/editions/:id/pdf`
+  - Blob URLs com download automático
+  - Nome do arquivo formatado corretamente
+- ✅ **Exportação CSV e XLS** implementada
+  - Exportar matérias e edições para CSV e Excel
+  - 4 novos endpoints: `/api/export/*`
+  - Botões em todas as listagens
+  - Nomes com timestamp automático
+
+**Impacto:** Sistema agora tem TODAS as funcionalidades solicitadas! 🎉
+**Bundle:** 109.52 kB (otimizado)
