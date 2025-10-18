@@ -2224,7 +2224,14 @@ async function editUser(id) {
         document.getElementById('userForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
-            const role = document.getElementById('userRole').value;
+            const nameElement = document.getElementById('userName');
+            const roleElement = document.getElementById('userRole');
+            
+            console.log('🚀 EDITUSER SUBMIT - Código app-v2.js executando!');
+            console.log('📝 Nome elemento:', nameElement, 'Valor:', nameElement?.value);
+            console.log('📝 Role elemento:', roleElement, 'Valor:', roleElement?.value);
+            
+            const role = roleElement.value;
             const secretariaValue = document.getElementById('userSecretaria').value;
             
             // Validar secretaria para perfil "secretaria"
@@ -2234,7 +2241,7 @@ async function editUser(id) {
             }
             
             const userData = {
-                name: document.getElementById('userName').value,
+                name: nameElement.value,
                 email: document.getElementById('userEmail').value,
                 cpf: document.getElementById('userCpf').value || null,
                 role: role,
@@ -2242,9 +2249,7 @@ async function editUser(id) {
                 active: document.getElementById('userActive').checked ? 1 : 0
             };
             
-            console.log('🔍 FRONTEND - Dados que serão enviados:', userData);
-            console.log('🔍 Elemento userName existe?', document.getElementById('userName'));
-            console.log('🔍 Elemento userRole existe?', document.getElementById('userRole'));
+            console.log('📤 DADOS A ENVIAR:', JSON.stringify(userData, null, 2));
             
             try {
                 await api.put(`/users/${id}`, userData);
