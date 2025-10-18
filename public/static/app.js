@@ -2285,7 +2285,7 @@ async function loadSecretariasManagement(container) {
                                 </div>
                             </div>
                             
-                            ${sec.description ? `<p class="text-sm text-gray-600 mb-4">${sec.description}</p>` : ''}
+                            ${sec.responsible ? `<p class="text-sm text-gray-600 mb-2"><strong>Responsável:</strong> ${sec.responsible}</p>` : ''}
                             
                             <div class="grid grid-cols-2 gap-4 pt-4 border-t border-gray-200">
                                 <div class="text-center">
@@ -2298,10 +2298,10 @@ async function loadSecretariasManagement(container) {
                                 </div>
                             </div>
                             
-                            ${sec.contact_email || sec.contact_phone ? `
+                            ${sec.email || sec.phone ? `
                                 <div class="mt-4 pt-4 border-t border-gray-200 text-xs text-gray-600">
-                                    ${sec.contact_email ? `<div><i class="fas fa-envelope mr-1"></i>${sec.contact_email}</div>` : ''}
-                                    ${sec.contact_phone ? `<div class="mt-1"><i class="fas fa-phone mr-1"></i>${sec.contact_phone}</div>` : ''}
+                                    ${sec.email ? `<div><i class="fas fa-envelope mr-1"></i>${sec.email}</div>` : ''}
+                                    ${sec.phone ? `<div class="mt-1"><i class="fas fa-phone mr-1"></i>${sec.phone}</div>` : ''}
                                 </div>
                             ` : ''}
                         </div>
@@ -2335,8 +2335,8 @@ function showNewSecretariaModal() {
                     </div>
                     
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Descrição (opcional)</label>
-                        <textarea id="secDescription" rows="3" class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="Breve descrição das atribuições..."></textarea>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Responsável (opcional)</label>
+                        <input type="text" id="secResponsible" class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="Nome do responsável">
                     </div>
                     
                     <div>
@@ -2370,9 +2370,9 @@ function showNewSecretariaModal() {
         const secData = {
             acronym: document.getElementById('secAcronym').value.trim().toUpperCase(),
             name: document.getElementById('secName').value.trim(),
-            description: document.getElementById('secDescription').value.trim() || null,
-            contact_email: document.getElementById('secEmail').value.trim() || null,
-            contact_phone: document.getElementById('secPhone').value.trim() || null
+            responsible: document.getElementById('secResponsible').value.trim() || null,
+            email: document.getElementById('secEmail').value.trim() || null,
+            phone: document.getElementById('secPhone').value.trim() || null
         };
         
         try {
@@ -2413,18 +2413,18 @@ async function editSecretaria(id) {
                         </div>
                         
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Descrição</label>
-                            <textarea id="secDescription" rows="3" class="w-full px-4 py-2 border border-gray-300 rounded-lg">${sec.description || ''}</textarea>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Responsável</label>
+                            <input type="text" id="secResponsible" value="${sec.responsible || ''}" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                         </div>
                         
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">Email de Contato</label>
-                            <input type="email" id="secEmail" value="${sec.contact_email || ''}" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                            <input type="email" id="secEmail" value="${sec.email || ''}" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                         </div>
                         
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">Telefone de Contato</label>
-                            <input type="tel" id="secPhone" value="${sec.contact_phone || ''}" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                            <input type="tel" id="secPhone" value="${sec.phone || ''}" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                         </div>
                         
                         <div class="flex justify-end space-x-2 mt-6">
@@ -2448,9 +2448,9 @@ async function editSecretaria(id) {
             const secData = {
                 acronym: document.getElementById('secAcronym').value.trim().toUpperCase(),
                 name: document.getElementById('secName').value.trim(),
-                description: document.getElementById('secDescription').value.trim() || null,
-                contact_email: document.getElementById('secEmail').value.trim() || null,
-                contact_phone: document.getElementById('secPhone').value.trim() || null
+                responsible: document.getElementById('secResponsible').value.trim() || null,
+                email: document.getElementById('secEmail').value.trim() || null,
+                phone: document.getElementById('secPhone').value.trim() || null
             };
             
             try {

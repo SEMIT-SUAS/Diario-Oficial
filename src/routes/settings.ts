@@ -25,19 +25,10 @@ settings.use('/*', async (c, next) => {
 settings.get('/', requireRole('admin'), async (c) => {
   try {
     const { results } = await c.env.DB.prepare(`
-      SELECT * FROM system_settings ORDER BY category, key
+      SELECT * FROM system_settings ORDER BY key
     `).all();
     
-    // Agrupar por categoria
-    const grouped: Record<string, any[]> = {};
-    for (const setting of results as any[]) {
-      if (!grouped[setting.category]) {
-        grouped[setting.category] = [];
-      }
-      grouped[setting.category].push(setting);
-    }
-    
-    return c.json({ settings: grouped });
+    return c.json({ settings: results });
     
   } catch (error: any) {
     console.error('Error fetching settings:', error);

@@ -79,7 +79,7 @@ secretarias.get('/:id', requireRole('admin', 'semad'), async (c) => {
 secretarias.post('/', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
-    const { name, acronym, description, contact_email, contact_phone } = await c.req.json();
+    const { name, acronym, email, phone, responsible } = await c.req.json();
     
     if (!name || !acronym) {
       return c.json({ error: 'Nome e sigla são obrigatórios' }, 400);
@@ -96,15 +96,15 @@ secretarias.post('/', requireRole('admin'), async (c) => {
     
     const result = await c.env.DB.prepare(`
       INSERT INTO secretarias (
-        name, acronym, description, contact_email, contact_phone,
+        name, acronym, email, phone, responsible,
         active, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
     `).bind(
       name,
       acronym.toUpperCase(),
-      description || null,
-      contact_email || null,
-      contact_phone || null
+      email || null,
+      phone || null,
+      responsible || null
     ).run();
     
     // Audit log
@@ -145,7 +145,7 @@ secretarias.put('/:id', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
     const id = parseInt(c.req.param('id'));
-    const { name, acronym, description, contact_email, contact_phone, active } = await c.req.json();
+    const { name, acronym, email, phone, responsible, active } = await c.req.json();
     
     // Verificar se existe
     const existing = await c.env.DB.prepare(
@@ -171,18 +171,18 @@ secretarias.put('/:id', requireRole('admin'), async (c) => {
       UPDATE secretarias 
       SET name = ?,
           acronym = ?,
-          description = ?,
-          contact_email = ?,
-          contact_phone = ?,
+          email = ?,
+          phone = ?,
+          responsible = ?,
           active = ?,
           updated_at = datetime('now')
       WHERE id = ?
     `).bind(
       name || existing.name,
       acronym ? acronym.toUpperCase() : existing.acronym,
-      description !== undefined ? description : existing.description,
-      contact_email !== undefined ? contact_email : existing.contact_email,
-      contact_phone !== undefined ? contact_phone : existing.contact_phone,
+      email !== undefined ? email : existing.email,
+      phone !== undefined ? phone : existing.phone,
+      responsible !== undefined ? responsible : existing.responsible,
       active !== undefined ? (active ? 1 : 0) : existing.active,
       id
     ).run();
@@ -202,7 +202,7 @@ secretarias.put('/:id', requireRole('admin'), async (c) => {
       id,
       'update',
       JSON.stringify(existing),
-      JSON.stringify({ name, acronym, description, contact_email, contact_phone, active }),
+      JSON.stringify({ name, acronym, email, phone, responsible, active }),
       ipAddress,
       userAgent
     ).run();
