@@ -240,6 +240,7 @@ npm install
 
 ## 📊 STATUS DO PROJETO
 
+### Funcionalidades Core
 - ✅ Backend API completo
 - ✅ Frontend SPA funcional
 - ✅ Banco de dados com 8 migrações
@@ -251,9 +252,24 @@ npm install
 - ✅ Export CSV/XLS
 - ✅ Responsive design
 - ✅ Documentação completa
+
+### Melhorias Recentes (Outubro 2025)
 - ✅ **Download automático de PDF** após publicar edição
-- ✅ **Feedback detalhado** durante download (console logs, mensagens)
-- ✅ **Tratamento de erros** robusto no download de PDF
+- ✅ **Logo do município** no cabeçalho do PDF
+- ✅ **Índice reorganizado** por Secretaria > Tipo > Matérias
+- ✅ **EXPEDIENTE** impresso no PDF
+- ✅ **"Publicado por: Nome - Sigla"** nas matérias
+- ✅ **Links de anexos** ao fim de cada matéria
+- ✅ **Excluir usuários** no CRUD (hard delete)
+- ✅ **Feedback detalhado** durante download (console logs)
+- ✅ **Tratamento de erros** robusto no download
+
+### Em Desenvolvimento
+- ⏳ Editor de texto rico (WYSIWYG) para descrições
+- ⏳ Edições suplementares incrementais automáticas
+- ⏳ Botões de pré-visualização de PDF
+- ⏳ Dashboard limitado (últimos 10 itens + paginação)
+- ⏳ Filtros de status na pesquisa (rascunho, enviado, aprovado, publicado)
 
 ## 📄 LICENÇA
 
