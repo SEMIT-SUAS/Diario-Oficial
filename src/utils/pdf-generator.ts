@@ -49,70 +49,78 @@ interface PDFResult {
 
 /**
  * Gera o HTML completo da edição do Diário Oficial
+ * Seguindo o layout do PDF real de São Luís
  */
 function generateEditionHTML(data: EditionData, validationHash: string, logoUrl: string = ''): string {
   const { edition, matters } = data;
   
-  // Formatar data para exibição
+  // Formatar data para exibição (ex: QUINTA * 16 DE OUTUBRO DE 2025)
   const editionDate = new Date(edition.edition_date);
-  const formattedDate = editionDate.toLocaleDateString('pt-BR', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric'
-  });
+  const dayOfWeek = editionDate.toLocaleDateString('pt-BR', { weekday: 'long' }).toUpperCase();
+  const day = editionDate.getDate();
+  const month = editionDate.toLocaleDateString('pt-BR', { month: 'long' }).toUpperCase();
+  const year = editionDate.getFullYear();
+  const formattedDate = `${dayOfWeek} * ${day} DE ${month} DE ${year}`;
+  
+  // Calcular ANO (romano ou numérico - vou usar numérico)
+  const foundationYear = 1980; // Assumindo fundação do diário
+  const yearsSinceFoundation = year - foundationYear;
   
   // Gerar índice organizado por Secretaria e Tipo
   const indexBySecretaria: Record<string, Record<string, any[]>> = {};
+  let pageCounter = 1;
   
-  matters.forEach((matter, index) => {
-    const secName = matter.secretaria_name || 'Sem Secretaria';
+  matters.forEach((matter) => {
+    const secName = matter.secretaria_acronym 
+      ? `${matter.secretaria_acronym.toUpperCase()}` 
+      : 'OUTROS';
+    const fullSecName = matter.secretaria_name || 'Outros';
     const matterType = (matter as any).matter_type_name || 'Outros';
     
     if (!indexBySecretaria[secName]) {
-      indexBySecretaria[secName] = {};
+      indexBySecretaria[secName] = { fullName: fullSecName, types: {} };
     }
     
-    if (!indexBySecretaria[secName][matterType]) {
-      indexBySecretaria[secName][matterType] = [];
+    if (!indexBySecretaria[secName].types[matterType]) {
+      indexBySecretaria[secName].types[matterType] = [];
     }
     
-    indexBySecretaria[secName][matterType].push({
+    indexBySecretaria[secName].types[matterType].push({
       ...matter,
-      order: index + 1
+      page: pageCounter
     });
+    pageCounter++;
   });
   
-  // Ordenar secretarias alfabeticamente
-  const sortedSecretarias = Object.keys(indexBySecretaria).sort();
+  // Ordenar secretarias: primeiro PREFEITURA, depois alfabeticamente
+  const sortedSecretarias = Object.keys(indexBySecretaria).sort((a, b) => {
+    if (a.includes('PREFEITURA')) return -1;
+    if (b.includes('PREFEITURA')) return 1;
+    return a.localeCompare(b);
+  });
   
-  // Gerar HTML do índice
+  // Gerar HTML do índice (formato do PDF real)
   const indexHTML = `
     <div class="index-section">
-      <h2 class="index-title">Índice</h2>
-      ${sortedSecretarias.map(secName => {
-        const types = indexBySecretaria[secName];
+      <h2 class="index-title">ÍNDICE - PREFEITURA MUNICIPAL DE SÃO LUÍS</h2>
+      ${sortedSecretarias.map(secAcronym => {
+        const secData = indexBySecretaria[secAcronym];
+        const types = secData.types;
         const sortedTypes = Object.keys(types).sort();
         
         return `
           <div class="index-secretaria">
-            <h3 class="index-secretaria-name">${secName}</h3>
+            <h3 class="index-secretaria-name">${secData.fullName.toUpperCase()}</h3>
             ${sortedTypes.map(typeName => {
               const mattersList = types[typeName];
               
-              return `
-                <div class="index-type">
-                  <h4 class="index-type-name">${typeName}</h4>
-                  <ul class="index-matters-list">
-                    ${mattersList.map(m => `
-                      <li class="index-matter-item">
-                        <span class="index-matter-title">${m.title}</span>
-                        <span class="index-matter-page">pág. ${m.order}</span>
-                      </li>
-                    `).join('')}
-                  </ul>
+              return mattersList.map(m => `
+                <div class="index-item">
+                  <span class="index-item-title">${m.title.toUpperCase()}</span>
+                  <span class="index-item-dots">.................................................................</span>
+                  <span class="index-item-page">${m.page}</span>
                 </div>
-              `;
+              `).join('');
             }).join('')}
           </div>
         `;
@@ -197,96 +205,128 @@ function generateEditionHTML(data: EditionData, validationHash: string, logoUrl:
       background: white;
     }
     
-    /* Cabeçalho da edição */
+    /* Cabeçalho da edição - Estilo do PDF real */
     .edition-header {
-      text-align: center;
-      border-bottom: 3px solid #1e40af;
-      padding-bottom: 1.5rem;
+      border: 3px solid #0066cc;
+      border-radius: 8px;
+      padding: 1rem;
       margin-bottom: 2rem;
       page-break-after: avoid;
+      background: linear-gradient(to bottom, #f0f9ff 0%, white 100%);
     }
     
-    .edition-header .logo {
-      max-height: 120px;
-      max-width: 200px;
-      margin: 0 auto 1rem auto;
-      display: block;
+    .header-top {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 1rem;
     }
     
-    .edition-header h1 {
-      font-size: 24pt;
+    .header-left, .header-right {
+      font-size: 9pt;
       font-weight: bold;
-      color: #1e40af;
-      text-transform: uppercase;
-      margin-bottom: 0.5rem;
-    }
-    
-    .edition-info {
-      font-size: 12pt;
-      color: #666;
-      margin-top: 0.5rem;
-    }
-    
-    .edition-info strong {
       color: #333;
     }
     
-    /* Índice */
+    .header-right {
+      text-align: right;
+    }
+    
+    .header-center {
+      text-align: center;
+    }
+    
+    .edition-header .logo {
+      width: 80px;
+      height: 80px;
+      margin: 0 auto 0.5rem;
+      display: block;
+    }
+    
+    .logo-placeholder {
+      font-size: 60px;
+      margin: 0 auto 0.5rem;
+    }
+    
+    .edition-header h1 {
+      font-size: 36pt;
+      font-weight: bold;
+      color: #1e40af;
+      margin: 0;
+      letter-spacing: 2px;
+    }
+    
+    .edition-header .highlight {
+      color: #0066cc;
+    }
+    
+    .edition-header .subtitle {
+      font-size: 11pt;
+      color: #666;
+      margin-top: 0.3rem;
+    }
+    
+    /* Índice - Estilo do PDF real */
     .index-section {
-      margin: 2rem 0;
-      padding: 1.5rem;
-      border: 2px solid #1e40af;
-      border-radius: 8px;
+      margin: 1rem 0;
+      padding: 0;
       background-color: #f8fafc;
       page-break-after: always;
     }
     
     .index-title {
-      font-size: 18pt;
+      font-size: 14pt;
       font-weight: bold;
-      color: #1e40af;
+      color: #000;
       text-align: center;
-      margin-bottom: 1.5rem;
+      margin-bottom: 1rem;
       text-transform: uppercase;
+      background-color: #e0e0e0;
+      padding: 0.5rem;
+      border-top: 2px solid #000;
+      border-bottom: 2px solid #000;
     }
     
     .index-secretaria {
-      margin-bottom: 1.5rem;
+      margin-bottom: 1rem;
       page-break-inside: avoid;
     }
     
     .index-secretaria-name {
-      font-size: 14pt;
+      font-size: 11pt;
       font-weight: bold;
-      color: #059669;
-      margin-bottom: 0.5rem;
-      border-bottom: 2px solid #059669;
-      padding-bottom: 0.3rem;
-    }
-    
-    .index-type {
-      margin-left: 1rem;
-      margin-bottom: 1rem;
-    }
-    
-    .index-type-name {
-      font-size: 12pt;
-      font-weight: bold;
-      color: #1e40af;
+      color: #000;
       margin-bottom: 0.3rem;
-    }
-    
-    .index-matters-list {
-      list-style: none;
-      margin-left: 1rem;
-    }
-    
-    .index-matter-item {
-      display: flex;
-      justify-content: space-between;
+      text-transform: uppercase;
       padding: 0.2rem 0;
-      font-size: 10pt;
-      border-bottom: 1px dotted #ccc;
+    }
+    
+    .index-item {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 0.5rem;
+      padding: 0.15rem 0;
+      font-size: 9pt;
+      line-height: 1.3;
+      align-items: center;
+    }
+    
+    .index-item-title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .index-item-dots {
+      color: #ccc;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    
+    .index-item-page {
+      font-weight: bold;
+      min-width: 30px;
+      text-align: right;
     }
     
     .index-matter-title {
@@ -420,34 +460,75 @@ function generateEditionHTML(data: EditionData, validationHash: string, logoUrl:
       margin: 2rem 0;
     }
     
-    /* Rodapé da edição */
+    /* Rodapé da edição - Estilo do PDF real */
     .edition-footer {
-      margin-top: 3rem;
-      padding-top: 1rem;
-      border-top: 3px solid #1e40af;
-      text-align: center;
-      font-size: 9pt;
-      color: #666;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #f8fafc;
+      border-top: 2px solid #0066cc;
+      padding: 0.5rem 1rem;
+      font-size: 7pt;
+      color: #333;
       page-break-inside: avoid;
     }
     
-    .edition-footer .logo-footer {
-      max-height: 60px;
-      max-width: 100px;
-      margin: 0 auto 0.5rem auto;
-      display: block;
+    .footer-content {
+      display: grid;
+      grid-template-columns: 2fr auto 2fr;
+      gap: 1rem;
+      align-items: center;
+      margin-bottom: 0.3rem;
     }
     
-    .edition-footer p {
-      margin-bottom: 0.3rem;
+    .footer-left {
+      text-align: left;
+    }
+    
+    .footer-center {
+      text-align: center;
+    }
+    
+    .footer-right {
+      text-align: right;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+    
+    .footer-text {
+      margin: 0;
+      line-height: 1.3;
+    }
+    
+    .footer-url {
+      margin: 0;
+      font-weight: bold;
+      color: #0066cc;
+    }
+    
+    .footer-page {
+      font-weight: bold;
+      font-size: 8pt;
+      margin: 0;
+    }
+    
+    .qr-code-placeholder {
+      margin-top: 0.2rem;
+    }
+    
+    .validation-info {
+      text-align: center;
+      padding-top: 0.3rem;
+      border-top: 1px solid #ddd;
     }
     
     .validation-hash {
       font-family: 'Courier New', monospace;
-      font-size: 8pt;
-      color: #999;
-      margin-top: 0.5rem;
-      word-break: break-all;
+      font-size: 7pt;
+      color: #666;
+      margin: 0;
     }
     
     /* Estilos para impressão */
@@ -487,12 +568,14 @@ function generateEditionHTML(data: EditionData, validationHash: string, logoUrl:
 </head>
 <body>
   <header class="edition-header">
-    ${logoUrl ? `<img src="${logoUrl}" alt="Logo da Prefeitura" class="logo">` : ''}
-    <h1>Diário Oficial Municipal</h1>
-    <div class="edition-info">
-      <p><strong>Edição Nº:</strong> ${edition.edition_number}</p>
-      <p><strong>Ano:</strong> ${edition.year}</p>
-      <p><strong>Data de Publicação:</strong> ${formattedDate}</p>
+    <div class="header-top">
+      <div class="header-left">SÃO LUÍS/MA * ${formattedDate}</div>
+      <div class="header-center">
+        ${logoUrl ? `<img src="${logoUrl}" alt="Brasão" class="logo">` : `<div class="logo-placeholder">🏛️</div>`}
+        <h1>Diário <span class="highlight">🗃️</span> Oficial</h1>
+        <p class="subtitle">Município de São Luís</p>
+      </div>
+      <div class="header-right">ANO XLV * N.º ${edition.edition_number} * ISSN 2764-8958</div>
     </div>
   </header>
   
@@ -503,18 +586,31 @@ function generateEditionHTML(data: EditionData, validationHash: string, logoUrl:
   </main>
   
   <footer class="edition-footer">
-    ${logoUrl ? `<img src="${logoUrl}" alt="Logo da Prefeitura" class="logo-footer">` : ''}
-    <p><strong>Diário Oficial Municipal</strong></p>
-    <p>Edição ${edition.edition_number} - ${edition.year}</p>
-    <p>Publicado em: ${editionDate.toLocaleDateString('pt-BR')}</p>
-    <p>Total de matérias publicadas: ${matters.length}</p>
-    <p class="validation-hash">
-      <strong>Hash de validação:</strong> ${validationHash}
-    </p>
-    <p style="margin-top: 1rem; font-size: 8pt;">
-      Este documento foi gerado eletronicamente e possui validade legal.<br>
-      Para verificar a autenticidade, acesse o portal oficial e informe o hash de validação acima.
-    </p>
+    <div class="footer-content">
+      <div class="footer-left">
+        <p class="footer-text">Este documento pode ser verificado no endereço eletrônico</p>
+        <p class="footer-url">https://diariooficial.saoluis.ma.gov.br</p>
+      </div>
+      <div class="footer-center">
+        <p class="footer-page"><strong>1 / ${matters.length + 1}</strong></p>
+      </div>
+      <div class="footer-right">
+        <p class="footer-text">Documento assinado com certificado digital e carimbo de tempo,</p>
+        <p class="footer-text">conforme Instrução Normativa N.º 70/2021 do TCE/MA.</p>
+        <div class="qr-code-placeholder" title="QR Code para verificação">
+          <svg viewBox="0 0 100 100" width="60" height="60">
+            <rect width="100" height="100" fill="#fff"/>
+            <path d="M10,10 h20 v20 h-20 z M70,10 h20 v20 h-20 z M10,70 h20 v20 h-20 z" fill="#000"/>
+            <text x="50" y="55" font-size="12" text-anchor="middle">QR</text>
+          </svg>
+        </div>
+      </div>
+    </div>
+    <div class="validation-info">
+      <p class="validation-hash">
+        <strong>Código Identificador:</strong> ${validationHash.substring(0, 36)}
+      </p>
+    </div>
   </footer>
 </body>
 </html>

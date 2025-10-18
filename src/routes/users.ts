@@ -159,13 +159,18 @@ users.put('/:id', async (c) => {
       return c.json({ error: 'Não é possível desativar sua própria conta' }, 400);
     }
     
+    // Garantir que secretaria_id seja null se não fornecido ou vazio
+    const finalSecretariaId = (secretaria_id !== undefined && secretaria_id !== null && secretaria_id !== '') 
+      ? secretaria_id 
+      : null;
+    
     // Atualizar usuário
     await c.env.DB.prepare(`
       UPDATE users 
       SET name = ?, email = ?, cpf = ?, role = ?, 
           secretaria_id = ?, active = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).bind(name, email, cpf || null, role, secretaria_id || null, active !== undefined ? active : 1, id).run();
+    `).bind(name, email, cpf || null, role, finalSecretariaId, active !== undefined ? active : 1, id).run();
     
     // Log de auditoria
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';

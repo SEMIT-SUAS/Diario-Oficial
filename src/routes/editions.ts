@@ -10,7 +10,62 @@ import { generateEditionPDF } from '../utils/pdf-generator';
 
 const editions = new Hono<HonoContext>();
 
-// Aplicar autenticação em todas as rotas (exceto download público de PDF)
+// Rotas públicas (sem autenticação) - DEVEM VIR ANTES DO MIDDLEWARE
+// GET /api/editions/:id/pdf - Download público de PDF
+editions.get('/:id/pdf', async (c) => {
+  try {
+    const id = parseInt(c.req.param('id'));
+    
+    // Buscar edição publicada
+    const edition = await c.env.DB.prepare(
+      'SELECT * FROM editions WHERE id = ? AND status = ?'
+    ).bind(id, 'published').first();
+    
+    if (!edition) {
+      return c.json({ error: 'Edição não encontrada ou não publicada' }, 404);
+    }
+    
+    // Buscar matérias da edição para gerar HTML
+    const { results: matters } = await c.env.DB.prepare(`
+      SELECT 
+        m.*,
+        s.name as secretaria_name,
+        s.acronym as secretaria_acronym,
+        u.name as author_name,
+        em.display_order
+      FROM edition_matters em
+      INNER JOIN matters m ON em.matter_id = m.id
+      LEFT JOIN secretarias s ON m.secretaria_id = s.id
+      LEFT JOIN users u ON m.author_id = u.id
+      WHERE em.edition_id = ?
+      ORDER BY em.display_order ASC
+    `).bind(id).all();
+    
+    // Gerar PDF novamente (contém o HTML)
+    const { generateEditionPDF } = await import('../utils/pdf-generator');
+    const pdfResult = await generateEditionPDF(c.env.R2, {
+      edition: edition as any,
+      matters: matters as any[]
+    }, c.env.DB);
+    
+    // Retornar HTML diretamente para download
+    const filename = `diario-oficial-${edition.edition_number.replace(/\//g, '-')}-${edition.year}.html`;
+    
+    return new Response(pdfResult.htmlContent, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'X-Content-Hash': pdfResult.hash
+      }
+    });
+    
+  } catch (error: any) {
+    console.error('Error fetching PDF:', error);
+    return c.json({ error: 'Erro ao buscar PDF', details: error.message }, 500);
+  }
+});
+
+// Aplicar autenticação em todas as outras rotas
 editions.use('/*', authMiddleware);
 
 /**
@@ -811,62 +866,7 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
   }
 });
 
-/**
- * GET /api/editions/:id/pdf (público - sem autenticação)
- * Download do PDF da edição publicada
- */
-editions.get('/:id/pdf', async (c) => {
-  try {
-    const id = parseInt(c.req.param('id'));
-    
-    // Buscar edição publicada
-    const edition = await c.env.DB.prepare(
-      'SELECT * FROM editions WHERE id = ? AND status = ?'
-    ).bind(id, 'published').first();
-    
-    if (!edition) {
-      return c.json({ error: 'Edição não encontrada ou não publicada' }, 404);
-    }
-    
-    // Buscar matérias da edição para gerar HTML
-    const { results: matters } = await c.env.DB.prepare(`
-      SELECT 
-        m.*,
-        s.name as secretaria_name,
-        s.acronym as secretaria_acronym,
-        u.name as author_name,
-        em.display_order
-      FROM edition_matters em
-      INNER JOIN matters m ON em.matter_id = m.id
-      LEFT JOIN secretarias s ON m.secretaria_id = s.id
-      LEFT JOIN users u ON m.author_id = u.id
-      WHERE em.edition_id = ?
-      ORDER BY em.display_order ASC
-    `).bind(id).all();
-    
-    // Gerar PDF novamente (contém o HTML)
-    const { generateEditionPDF } = await import('../utils/pdf-generator');
-    const pdfResult = await generateEditionPDF(c.env.R2, {
-      edition: edition as any,
-      matters: matters as any[]
-    }, c.env.DB);
-    
-    // Retornar HTML diretamente para download
-    const filename = `diario-oficial-${edition.edition_number.replace(/\//g, '-')}-${edition.year}.html`;
-    
-    return new Response(pdfResult.htmlContent, {
-      headers: {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'X-Content-Hash': pdfResult.hash
-      }
-    });
-    
-  } catch (error: any) {
-    console.error('Error fetching PDF:', error);
-    return c.json({ error: 'Erro ao buscar PDF', details: error.message }, 500);
-  }
-});
+// Rota movida para cima (antes do authMiddleware) para permitir acesso público
 
 /**
  * DELETE /api/editions/:id

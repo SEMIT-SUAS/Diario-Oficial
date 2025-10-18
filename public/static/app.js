@@ -538,7 +538,18 @@ async function loadMyMatters(container) {
                                     ${matter.title}
                                     ${priorityBadge[matter.priority || 'normal']}
                                 </h3>
-                                <p class="text-sm text-gray-500 mt-1">${matterTypeName}</p>
+                                <div class="flex items-center gap-3 mt-2">
+                                    <span class="text-sm text-blue-600 font-medium">
+                                        <i class="fas fa-building mr-1"></i>${matter.secretaria_name || 'Sem secretaria'}
+                                    </span>
+                                    <span class="text-sm text-gray-500">
+                                        <i class="fas fa-tag mr-1"></i>${matterTypeName}
+                                    </span>
+                                    <span class="text-xs ${matter.layout_columns === 2 ? 'text-purple-600' : 'text-gray-500'}">
+                                        <i class="fas fa-columns mr-1"></i>${matter.layout_columns === 2 ? '2 Colunas' : '1 Coluna'}
+                                    </span>
+                                    ${matter.has_attachments ? '<span class="text-xs text-green-600"><i class="fas fa-paperclip mr-1"></i>Com anexo</span>' : ''}
+                                </div>
                                 <p class="text-xs text-gray-400 mt-2">
                                     <i class="fas fa-calendar mr-1"></i>${formatDate(matter.created_at)}
                                 </p>
@@ -2095,13 +2106,17 @@ function closeUserModal() {
 
 async function editUser(id) {
     try {
+        // Buscar secretarias para o select
+        const { data: secretariasData } = await api.get('/secretarias');
+        const secretarias = secretariasData.secretarias || [];
+        
         const { data } = await api.get(`/users/${id}`);
         const user = data.user;
         
         const modal = document.createElement('div');
         modal.innerHTML = `
             <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" id="userModal">
-                <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+                <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 max-h-screen overflow-y-auto">
                     <h3 class="text-xl font-bold text-gray-800 mb-4">Editar Usuário</h3>
                     
                     <form id="userForm" class="space-y-4">
@@ -2117,17 +2132,35 @@ async function editUser(id) {
                         
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">CPF</label>
-                            <input type="text" id="userCpf" value="${user.cpf || ''}" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                            <input type="text" id="userCpf" value="${user.cpf || ''}" class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="000.000.000-00">
                         </div>
                         
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">Perfil</label>
                             <select id="userRole" required class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                                 <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Administrador</option>
-                                <option value="semad" ${user.role === 'semad' ? 'selected' : ''}>SEMAD</option>
+                                <option value="semad" ${user.role === 'semad' ? 'selected' : ''}>SEMAD (Coordenador)</option>
                                 <option value="secretaria" ${user.role === 'secretaria' ? 'selected' : ''}>Secretaria</option>
                                 <option value="publico" ${user.role === 'publico' ? 'selected' : ''}>Público</option>
                             </select>
+                        </div>
+                        
+                        <div id="secretariaFieldContainer">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Secretaria</label>
+                            <select id="userSecretaria" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                                <option value="">-- Nenhuma --</option>
+                                ${secretarias.map(s => `
+                                    <option value="${s.id}" ${user.secretaria_id === s.id ? 'selected' : ''}>
+                                        ${s.acronym} - ${s.name}
+                                    </option>
+                                `).join('')}
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">Obrigatório para usuários do tipo "Secretaria"</p>
+                        </div>
+                        
+                        <div class="flex items-center">
+                            <input type="checkbox" id="userActive" ${user.active ? 'checked' : ''} class="mr-2">
+                            <label for="userActive" class="text-sm font-medium text-gray-700">Usuário Ativo</label>
                         </div>
                         
                         <div class="flex justify-end space-x-2 mt-6">
@@ -2145,15 +2178,41 @@ async function editUser(id) {
         
         document.body.appendChild(modal);
         
+        // Mostrar/esconder campo secretaria baseado no perfil
+        const roleSelect = document.getElementById('userRole');
+        const secretariaField = document.getElementById('secretariaFieldContainer');
+        
+        function toggleSecretariaField() {
+            const role = roleSelect.value;
+            if (role === 'secretaria' || role === 'semad') {
+                secretariaField.style.display = 'block';
+            } else {
+                secretariaField.style.display = 'none';
+            }
+        }
+        
+        roleSelect.addEventListener('change', toggleSecretariaField);
+        toggleSecretariaField();
+        
         document.getElementById('userForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            
+            const role = document.getElementById('userRole').value;
+            const secretariaValue = document.getElementById('userSecretaria').value;
+            
+            // Validar secretaria para perfil "secretaria"
+            if (role === 'secretaria' && !secretariaValue) {
+                alert('Por favor, selecione uma secretaria para usuários do tipo "Secretaria"');
+                return;
+            }
             
             const userData = {
                 name: document.getElementById('userName').value,
                 email: document.getElementById('userEmail').value,
                 cpf: document.getElementById('userCpf').value || null,
-                role: document.getElementById('userRole').value,
-                active: user.active
+                role: role,
+                secretaria_id: secretariaValue ? parseInt(secretariaValue) : null,
+                active: document.getElementById('userActive').checked ? 1 : 0
             };
             
             try {
@@ -2167,6 +2226,7 @@ async function editUser(id) {
         });
         
     } catch (error) {
+        console.error('Error loading user:', error);
         alert('Erro ao carregar dados do usuário');
     }
 }
@@ -3029,9 +3089,22 @@ function formatDate(dateString) {
 // EDITIONS MANAGEMENT
 // ====================================
 
-async function loadEditions(container) {
+// Estado de paginação
+const paginationState = {
+    editions: { page: 1, perPage: 20, total: 0 },
+    matters: { page: 1, perPage: 20, total: 0 }
+};
+
+async function loadEditions(container, page = 1) {
     try {
+        paginationState.editions.page = page;
         const { data } = await api.get('/editions');
+        
+        // Aplicar paginação no frontend
+        const startIndex = (page - 1) * paginationState.editions.perPage;
+        const endIndex = startIndex + paginationState.editions.perPage;
+        const paginatedEditions = data.editions.slice(startIndex, endIndex);
+        paginationState.editions.total = data.editions.length;
         
         container.innerHTML = `
             <div class="mb-6">
@@ -3073,8 +3146,10 @@ async function loadEditions(container) {
                     </div>
                     
                     <div id="editionsTableContainer">
-                        ${renderEditionsTable(data.editions)}
+                        ${renderEditionsTable(paginatedEditions)}
                     </div>
+                    
+                    ${renderPagination('editions', paginationState.editions)}
                 </div>
             </div>
         `;
@@ -3083,6 +3158,92 @@ async function loadEditions(container) {
         console.error('Error loading editions:', error);
         container.innerHTML = `<p class="text-red-600">Erro ao carregar edições: ${error.message}</p>`;
     }
+}
+
+function renderPagination(type, state) {
+    const totalPages = Math.ceil(state.total / state.perPage);
+    
+    if (totalPages <= 1) return '';
+    
+    const currentPage = state.page;
+    const showPages = 5; // Mostrar 5 botões de página
+    
+    let startPage = Math.max(1, currentPage - Math.floor(showPages / 2));
+    let endPage = Math.min(totalPages, startPage + showPages - 1);
+    
+    if (endPage - startPage < showPages - 1) {
+        startPage = Math.max(1, endPage - showPages + 1);
+    }
+    
+    let buttons = '';
+    
+    // Botão Anterior
+    if (currentPage > 1) {
+        buttons += `
+            <button onclick="loadEditions(document.getElementById('mainContent'), ${currentPage - 1})" 
+                class="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition">
+                <i class="fas fa-chevron-left mr-2"></i>Anterior
+            </button>
+        `;
+    }
+    
+    // Primeira página
+    if (startPage > 1) {
+        buttons += `
+            <button onclick="loadEditions(document.getElementById('mainContent'), 1)" 
+                class="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition">
+                1
+            </button>
+        `;
+        if (startPage > 2) {
+            buttons += `<span class="px-2">...</span>`;
+        }
+    }
+    
+    // Páginas do meio
+    for (let i = startPage; i <= endPage; i++) {
+        const isActive = i === currentPage;
+        buttons += `
+            <button onclick="loadEditions(document.getElementById('mainContent'), ${i})" 
+                class="px-4 py-2 ${isActive ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'} border border-gray-300 rounded-lg hover:bg-blue-700 hover:text-white transition">
+                ${i}
+            </button>
+        `;
+    }
+    
+    // Última página
+    if (endPage < totalPages) {
+        if (endPage < totalPages - 1) {
+            buttons += `<span class="px-2">...</span>`;
+        }
+        buttons += `
+            <button onclick="loadEditions(document.getElementById('mainContent'), ${totalPages})" 
+                class="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition">
+                ${totalPages}
+            </button>
+        `;
+    }
+    
+    // Botão Próximo
+    if (currentPage < totalPages) {
+        buttons += `
+            <button onclick="loadEditions(document.getElementById('mainContent'), ${currentPage + 1})" 
+                class="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition">
+                Próximo<i class="fas fa-chevron-right ml-2"></i>
+            </button>
+        `;
+    }
+    
+    return `
+        <div class="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-between items-center">
+            <div class="text-sm text-gray-600">
+                Mostrando ${((currentPage - 1) * state.perPage) + 1} a ${Math.min(currentPage * state.perPage, state.total)} de ${state.total} edições
+            </div>
+            <div class="flex space-x-2">
+                ${buttons}
+            </div>
+        </div>
+    `;
 }
 
 function renderEditionsTable(editions) {
@@ -3147,10 +3308,10 @@ function renderEditionsTable(editions) {
                                     <i class="fas fa-trash"></i>
                                 </button>
                             ` : ''}
-                            ${edition.status === 'published' && edition.pdf_url ? `
-                                <a href="${edition.pdf_url}" target="_blank" class="text-indigo-600 hover:text-indigo-900" title="Download PDF">
-                                    <i class="fas fa-file-pdf"></i>
-                                </a>
+                            ${edition.status === 'published' ? `
+                                <button onclick="downloadEditionPDF(${edition.id}, '${edition.edition_number}', ${edition.year})" class="text-indigo-600 hover:text-indigo-900" title="Download PDF">
+                                    <i class="fas fa-download"></i>
+                                </button>
                             ` : ''}
                         </td>
                     </tr>
@@ -3615,8 +3776,11 @@ async function publishEdition(id) {
     try {
         const { data } = await api.post(`/editions/${id}/publish`);
         alert(`Edição publicada com sucesso!\n\nPDF gerado: ${data.total_pages} página(s)\nHash: ${data.pdf_hash.substring(0, 16)}...`);
-        loadView('editions');
+        
+        // Force reload of editions view
+        await loadView('editions');
     } catch (error) {
+        console.error('Erro ao publicar edição:', error);
         alert(error.response?.data?.error || 'Erro ao publicar edição');
     }
 }
@@ -3868,6 +4032,7 @@ async function verifyMatterSignature() {
 
 async function downloadEditionPDF(editionId, editionNumber, year) {
     try {
+        // Tentar baixar PDF/HTML do backend
         const response = await fetch(`/api/editions/${editionId}/pdf`, {
             headers: {
                 'Authorization': `Bearer ${state.token}`
@@ -3875,21 +4040,34 @@ async function downloadEditionPDF(editionId, editionNumber, year) {
         });
         
         if (!response.ok) {
-            throw new Error('Erro ao baixar PDF');
+            throw new Error('Erro ao baixar arquivo');
         }
+        
+        // Detectar tipo de conteúdo
+        const contentType = response.headers.get('content-type');
+        const isPDF = contentType && contentType.includes('pdf');
+        const extension = isPDF ? 'pdf' : 'html';
         
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `diario-oficial-${editionNumber.replace(/\//g, '-')}-${year}.html`;
+        a.download = `diario-oficial-${editionNumber.replace(/\//g, '-')}-${year}.${extension}`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
         
+        // Informar ao usuário
+        if (!isPDF) {
+            setTimeout(() => {
+                alert('📄 Arquivo HTML baixado com sucesso!\n\nPara converter em PDF:\n1. Abra o arquivo no navegador\n2. Use Ctrl+P ou Cmd+P\n3. Escolha "Salvar como PDF"');
+            }, 500);
+        }
+        
     } catch (error) {
-        alert('Erro ao baixar PDF: ' + error.message);
+        console.error('Download error:', error);
+        alert('Erro ao baixar arquivo: ' + error.message);
     }
 }
 
