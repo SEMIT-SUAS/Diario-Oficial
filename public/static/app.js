@@ -135,14 +135,6 @@ function showLogin() {
 // Show dashboard
 async function showDashboard() {
     try {
-        // Check if user is logged in
-        const token = localStorage.getItem('token');
-        if (!token) {
-            console.log('No token found, redirecting to login');
-            showLogin();
-            return;
-        }
-        
         // Load user data
         if (!state.user) {
             const { data } = await api.get('/auth/me');
