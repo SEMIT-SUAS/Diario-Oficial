@@ -32,7 +32,9 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
     response => response,
     error => {
-        if (error.response?.status === 401) {
+        // Apenas fazer logout se for erro 401 na rota /auth/me ou /auth/login
+        if (error.response?.status === 401 && 
+            (error.config.url.includes('/auth/me') || error.config.url.includes('/auth/login'))) {
             logout();
         }
         return Promise.reject(error);
@@ -1934,8 +1936,8 @@ async function toggleUserStatus(id, currentStatus) {
 
 async function loadHolidaysManagement(container) {
     try {
-        // Buscar feriados do banco
-        const { data } = await api.get('/matters?limit=1'); // Placeholder - seria /holidays
+        // Buscar feriados do banco - usar query direta ao DB pois não há rota específica
+        const currentYear = new Date().getFullYear();
         
         container.innerHTML = `
             <div class="mb-6">
@@ -1943,37 +1945,176 @@ async function loadHolidaysManagement(container) {
                     <h2 class="text-2xl font-bold text-gray-800">
                         <i class="fas fa-calendar-alt mr-2"></i>Gerenciamento de Feriados
                     </h2>
-                    <button onclick="alert('Funcionalidade: Cadastrar novo feriado')" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition">
-                        <i class="fas fa-plus mr-2"></i>Novo Feriado
-                    </button>
+                    <div class="flex space-x-2">
+                        <select id="holidayYearFilter" class="px-4 py-2 border border-gray-300 rounded-lg" onchange="filterHolidaysByYear()">
+                            <option value="">Todos os Anos</option>
+                            <option value="${currentYear - 1}">${currentYear - 1}</option>
+                            <option value="${currentYear}" selected>${currentYear}</option>
+                            <option value="${currentYear + 1}">${currentYear + 1}</option>
+                        </select>
+                        <button onclick="showNewHolidayModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition">
+                            <i class="fas fa-plus mr-2"></i>Novo Feriado
+                        </button>
+                    </div>
                 </div>
                 
                 <div class="bg-white rounded-lg shadow overflow-hidden">
-                    <div class="p-6">
-                        <div class="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                            <p class="text-blue-800">
-                                <i class="fas fa-info-circle mr-2"></i>
-                                <strong>Módulo Funcional:</strong> Os feriados já estão sendo validados no envio de matérias!
-                            </p>
-                            <p class="text-blue-700 text-sm mt-2">
-                                A tabela <code>holidays</code> já contém os feriados nacionais de 2025 e está integrada ao sistema.
-                            </p>
-                        </div>
-                        
-                        <h3 class="font-semibold text-gray-800 mb-3">Funcionalidades Disponíveis:</h3>
-                        <ul class="space-y-2 text-gray-600">
-                            <li><i class="fas fa-check text-green-600 mr-2"></i>Validação automática de feriados no envio</li>
-                            <li><i class="fas fa-check text-green-600 mr-2"></i>Bloqueio de envios em dias não úteis</li>
-                            <li><i class="fas fa-check text-green-600 mr-2"></i>Banco de dados populado com feriados 2025</li>
-                            <li><i class="fas fa-clock text-yellow-600 mr-2"></i>Interface de cadastro (em desenvolvimento)</li>
-                            <li><i class="fas fa-clock text-yellow-600 mr-2"></i>Feriados recorrentes (em desenvolvimento)</li>
-                        </ul>
-                    </div>
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Data</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nome</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tipo</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Recorrente</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="holidaysTableBody" class="bg-white divide-y divide-gray-200">
+                            <tr><td colspan="5" class="px-6 py-4 text-center text-gray-500">Carregando...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         `;
+        
+        loadHolidaysTable(currentYear);
+        
     } catch (error) {
-        container.innerHTML = `<p class="text-red-600">Erro ao carregar módulo</p>`;
+        container.innerHTML = `<p class="text-red-600">Erro ao carregar módulo: ${error.message}</p>`;
+    }
+}
+
+async function loadHolidaysTable(year = null) {
+    // Simular dados pois não temos rota de feriados ainda
+    const holidays = [
+        { id: 1, date: '2025-01-01', name: 'Confraternização Universal', type: 'national', is_recurring: 1 },
+        { id: 2, date: '2025-02-04', name: 'Carnaval', type: 'optional', is_recurring: 0 },
+        { id: 3, date: '2025-04-18', name: 'Sexta-feira Santa', type: 'national', is_recurring: 0 },
+        { id: 4, date: '2025-04-21', name: 'Tiradentes', type: 'national', is_recurring: 1 },
+        { id: 5, date: '2025-05-01', name: 'Dia do Trabalho', type: 'national', is_recurring: 1 },
+        { id: 6, date: '2025-09-07', name: 'Independência do Brasil', type: 'national', is_recurring: 1 },
+        { id: 7, date: '2025-10-12', name: 'Nossa Senhora Aparecida', type: 'national', is_recurring: 1 },
+        { id: 8, date: '2025-11-02', name: 'Finados', type: 'national', is_recurring: 1 },
+        { id: 9, date: '2025-11-15', name: 'Proclamação da República', type: 'national', is_recurring: 1 },
+        { id: 10, date: '2025-12-25', name: 'Natal', type: 'national', is_recurring: 1 }
+    ];
+    
+    const tbody = document.getElementById('holidaysTableBody');
+    if (!tbody) return;
+    
+    const filteredHolidays = year ? holidays.filter(h => h.date.startsWith(year)) : holidays;
+    
+    if (filteredHolidays.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="px-6 py-4 text-center text-gray-500">Nenhum feriado encontrado</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = filteredHolidays.map(holiday => `
+        <tr class="hover:bg-gray-50">
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                ${new Date(holiday.date + 'T00:00:00').toLocaleDateString('pt-BR')}
+            </td>
+            <td class="px-6 py-4 text-sm text-gray-900">${holiday.name}</td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <span class="px-2 py-1 text-xs rounded-full ${holiday.type === 'national' ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800'}">
+                    ${holiday.type === 'national' ? 'Nacional' : 'Facultativo'}
+                </span>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                ${holiday.is_recurring ? '<i class="fas fa-check text-green-600"></i> Sim' : '<i class="fas fa-times text-gray-400"></i> Não'}
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                <button onclick="editHoliday(${holiday.id})" class="text-blue-600 hover:text-blue-900 mr-3">
+                    <i class="fas fa-edit"></i>
+                </button>
+                <button onclick="deleteHoliday(${holiday.id}, '${holiday.name}')" class="text-red-600 hover:text-red-900">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function filterHolidaysByYear() {
+    const year = document.getElementById('holidayYearFilter').value;
+    loadHolidaysTable(year || null);
+}
+
+function showNewHolidayModal() {
+    const modal = document.createElement('div');
+    modal.innerHTML = `
+        <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" id="holidayModal">
+            <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+                <h3 class="text-xl font-bold text-gray-800 mb-4">Novo Feriado</h3>
+                
+                <form id="holidayForm" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Nome *</label>
+                        <input type="text" id="holidayName" required class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Data *</label>
+                        <input type="date" id="holidayDate" required class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Tipo *</label>
+                        <select id="holidayType" required class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                            <option value="national">Nacional</option>
+                            <option value="optional">Facultativo</option>
+                            <option value="municipal">Municipal</option>
+                        </select>
+                    </div>
+                    
+                    <div class="flex items-center">
+                        <input type="checkbox" id="holidayRecurring" class="mr-2">
+                        <label class="text-sm text-gray-700">Feriado Recorrente (todo ano)</label>
+                    </div>
+                    
+                    <div class="flex justify-end space-x-2 mt-6">
+                        <button type="button" onclick="closeHolidayModal()" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg">
+                            Cancelar
+                        </button>
+                        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                            Criar Feriado
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    document.getElementById('holidayForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const holidayData = {
+            name: document.getElementById('holidayName').value.trim(),
+            date: document.getElementById('holidayDate').value,
+            type: document.getElementById('holidayType').value,
+            is_recurring: document.getElementById('holidayRecurring').checked ? 1 : 0
+        };
+        
+        // TODO: Implementar rota de API quando backend estiver pronto
+        alert('Funcionalidade de criação será implementada quando a rota /api/holidays existir');
+        console.log('Holiday data:', holidayData);
+        closeHolidayModal();
+    });
+}
+
+function closeHolidayModal() {
+    document.getElementById('holidayModal')?.remove();
+}
+
+function editHoliday(id) {
+    alert(`Editar feriado ID: ${id} - Implementar quando rota /api/holidays/:id existir`);
+}
+
+function deleteHoliday(id, name) {
+    if (confirm(`Tem certeza que deseja excluir o feriado "${name}"?`)) {
+        alert(`Deletar feriado ID: ${id} - Implementar quando rota DELETE /api/holidays/:id existir`);
     }
 }
 
@@ -1983,62 +2124,232 @@ async function loadHolidaysManagement(container) {
 
 async function loadSecretariasManagement(container) {
     try {
+        const { data } = await api.get('/secretarias');
+        const secretarias = data.secretarias || [];
+        
         container.innerHTML = `
             <div class="mb-6">
                 <div class="flex justify-between items-center mb-6">
                     <h2 class="text-2xl font-bold text-gray-800">
                         <i class="fas fa-building mr-2"></i>Gerenciamento de Secretarias
                     </h2>
-                    <button onclick="alert('Funcionalidade: Cadastrar nova secretaria')" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition">
+                    <button onclick="showNewSecretariaModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition">
                         <i class="fas fa-plus mr-2"></i>Nova Secretaria
                     </button>
                 </div>
                 
-                <div class="bg-white rounded-lg shadow overflow-hidden">
-                    <div class="p-6">
-                        <div class="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                            <p class="text-blue-800">
-                                <i class="fas fa-info-circle mr-2"></i>
-                                <strong>Módulo Funcional:</strong> O sistema já possui 5 secretarias cadastradas!
-                            </p>
-                            <p class="text-blue-700 text-sm mt-2">
-                                A tabela <code>secretarias</code> está integrada ao sistema e vinculada aos usuários.
-                            </p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    ${secretarias.map(sec => `
+                        <div class="bg-white rounded-lg shadow p-6">
+                            <div class="flex justify-between items-start mb-4">
+                                <div class="flex-1">
+                                    <h3 class="text-lg font-bold text-gray-800">${sec.acronym}</h3>
+                                    <p class="text-sm text-gray-600 mt-1">${sec.name}</p>
+                                </div>
+                                <div class="flex space-x-2">
+                                    <button onclick="editSecretaria(${sec.id})" class="text-blue-600 hover:text-blue-800">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                    <button onclick="deleteSecretaria(${sec.id}, '${sec.acronym}')" class="text-red-600 hover:text-red-800">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            ${sec.description ? `<p class="text-sm text-gray-600 mb-4">${sec.description}</p>` : ''}
+                            
+                            <div class="grid grid-cols-2 gap-4 pt-4 border-t border-gray-200">
+                                <div class="text-center">
+                                    <p class="text-2xl font-bold text-blue-600">${sec.total_users || 0}</p>
+                                    <p class="text-xs text-gray-500">Usuários</p>
+                                </div>
+                                <div class="text-center">
+                                    <p class="text-2xl font-bold text-green-600">${sec.total_matters || 0}</p>
+                                    <p class="text-xs text-gray-500">Matérias</p>
+                                </div>
+                            </div>
+                            
+                            ${sec.contact_email || sec.contact_phone ? `
+                                <div class="mt-4 pt-4 border-t border-gray-200 text-xs text-gray-600">
+                                    ${sec.contact_email ? `<div><i class="fas fa-envelope mr-1"></i>${sec.contact_email}</div>` : ''}
+                                    ${sec.contact_phone ? `<div class="mt-1"><i class="fas fa-phone mr-1"></i>${sec.contact_phone}</div>` : ''}
+                                </div>
+                            ` : ''}
                         </div>
-                        
-                        <h3 class="font-semibold text-gray-800 mb-3">Secretarias Cadastradas:</h3>
-                        <div class="grid gap-3">
-                            <div class="border border-gray-200 rounded-lg p-3">
-                                <span class="font-semibold text-gray-800">SEMAD</span>
-                                <span class="text-gray-600 text-sm ml-2">- Secretaria Municipal de Administração</span>
-                            </div>
-                            <div class="border border-gray-200 rounded-lg p-3">
-                                <span class="font-semibold text-gray-800">SEMED</span>
-                                <span class="text-gray-600 text-sm ml-2">- Secretaria Municipal de Educação</span>
-                            </div>
-                            <div class="border border-gray-200 rounded-lg p-3">
-                                <span class="font-semibold text-gray-800">SEMUS</span>
-                                <span class="text-gray-600 text-sm ml-2">- Secretaria Municipal de Saúde</span>
-                            </div>
-                            <div class="border border-gray-200 rounded-lg p-3">
-                                <span class="font-semibold text-gray-800">SEMFAZ</span>
-                                <span class="text-gray-600 text-sm ml-2">- Secretaria Municipal de Fazenda</span>
-                            </div>
-                            <div class="border border-gray-200 rounded-lg p-3">
-                                <span class="font-semibold text-gray-800">SEMOB</span>
-                                <span class="text-gray-600 text-sm ml-2">- Secretaria Municipal de Obras</span>
-                            </div>
-                        </div>
-                        
-                        <div class="mt-4 text-sm text-gray-600">
-                            <i class="fas fa-check text-green-600 mr-2"></i>Todas as secretarias estão ativas e funcionais no sistema
-                        </div>
-                    </div>
+                    `).join('')}
                 </div>
             </div>
         `;
+        
     } catch (error) {
-        container.innerHTML = `<p class="text-red-600">Erro ao carregar módulo</p>`;
+        container.innerHTML = `<p class="text-red-600">Erro ao carregar secretarias: ${error.message}</p>`;
+    }
+}
+
+function showNewSecretariaModal() {
+    const modal = document.createElement('div');
+    modal.innerHTML = `
+        <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" id="secretariaModal">
+            <div class="bg-white rounded-lg shadow-xl p-6 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
+                <h3 class="text-xl font-bold text-gray-800 mb-4">Nova Secretaria</h3>
+                
+                <form id="secretariaForm" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Sigla/Acrônimo *</label>
+                        <input type="text" id="secAcronym" required maxlength="10" class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="Ex: SEMED">
+                        <p class="text-xs text-gray-500 mt-1">Máximo 10 caracteres, será convertido para maiúsculas</p>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Nome Completo *</label>
+                        <input type="text" id="secName" required class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="Ex: Secretaria Municipal de Educação">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Descrição (opcional)</label>
+                        <textarea id="secDescription" rows="3" class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="Breve descrição das atribuições..."></textarea>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Email de Contato</label>
+                        <input type="email" id="secEmail" class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="contato@secretaria.gov.br">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Telefone de Contato</label>
+                        <input type="tel" id="secPhone" class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="(98) 3214-5678">
+                    </div>
+                    
+                    <div class="flex justify-end space-x-2 mt-6">
+                        <button type="button" onclick="closeSecretariaModal()" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg">
+                            Cancelar
+                        </button>
+                        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                            Criar Secretaria
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    document.getElementById('secretariaForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const secData = {
+            acronym: document.getElementById('secAcronym').value.trim().toUpperCase(),
+            name: document.getElementById('secName').value.trim(),
+            description: document.getElementById('secDescription').value.trim() || null,
+            contact_email: document.getElementById('secEmail').value.trim() || null,
+            contact_phone: document.getElementById('secPhone').value.trim() || null
+        };
+        
+        try {
+            await api.post('/secretarias', secData);
+            alert('Secretaria criada com sucesso!');
+            closeSecretariaModal();
+            loadView('secretarias');
+        } catch (error) {
+            alert(error.response?.data?.error || 'Erro ao criar secretaria');
+        }
+    });
+}
+
+function closeSecretariaModal() {
+    document.getElementById('secretariaModal')?.remove();
+}
+
+async function editSecretaria(id) {
+    try {
+        const { data } = await api.get(`/secretarias/${id}`);
+        const sec = data.secretaria;
+        
+        const modal = document.createElement('div');
+        modal.innerHTML = `
+            <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" id="secretariaModal">
+                <div class="bg-white rounded-lg shadow-xl p-6 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4">Editar Secretaria</h3>
+                    
+                    <form id="secretariaForm" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Sigla/Acrônimo *</label>
+                            <input type="text" id="secAcronym" value="${sec.acronym}" required maxlength="10" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Nome Completo *</label>
+                            <input type="text" id="secName" value="${sec.name}" required class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Descrição</label>
+                            <textarea id="secDescription" rows="3" class="w-full px-4 py-2 border border-gray-300 rounded-lg">${sec.description || ''}</textarea>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Email de Contato</label>
+                            <input type="email" id="secEmail" value="${sec.contact_email || ''}" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Telefone de Contato</label>
+                            <input type="tel" id="secPhone" value="${sec.contact_phone || ''}" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                        </div>
+                        
+                        <div class="flex justify-end space-x-2 mt-6">
+                            <button type="button" onclick="closeSecretariaModal()" class="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-lg">
+                                Cancelar
+                            </button>
+                            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                                Salvar Alterações
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        document.getElementById('secretariaForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const secData = {
+                acronym: document.getElementById('secAcronym').value.trim().toUpperCase(),
+                name: document.getElementById('secName').value.trim(),
+                description: document.getElementById('secDescription').value.trim() || null,
+                contact_email: document.getElementById('secEmail').value.trim() || null,
+                contact_phone: document.getElementById('secPhone').value.trim() || null
+            };
+            
+            try {
+                await api.put(`/secretarias/${id}`, secData);
+                alert('Secretaria atualizada com sucesso!');
+                closeSecretariaModal();
+                loadView('secretarias');
+            } catch (error) {
+                alert(error.response?.data?.error || 'Erro ao atualizar secretaria');
+            }
+        });
+        
+    } catch (error) {
+        alert('Erro ao carregar dados da secretaria');
+    }
+}
+
+async function deleteSecretaria(id, acronym) {
+    if (!confirm(`Tem certeza que deseja excluir a secretaria "${acronym}"?\n\nATENÇÃO: Esta ação não pode ser desfeita!`)) {
+        return;
+    }
+    
+    try {
+        await api.delete(`/secretarias/${id}`);
+        alert('Secretaria excluída com sucesso!');
+        loadView('secretarias');
+    } catch (error) {
+        alert(error.response?.data?.error || 'Erro ao excluir secretaria');
     }
 }
 
