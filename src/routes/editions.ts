@@ -699,7 +699,7 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
     const pdfResult = await generateEditionPDF(c.env.R2, {
       edition: edition as any,
       matters: matters as any[]
-    });
+    }, c.env.DB);
     
     // Atualizar edição com informações do PDF
     await c.env.DB.prepare(`
@@ -807,7 +807,7 @@ editions.get('/:id/pdf', async (c) => {
     const pdfResult = await generateEditionPDF(c.env.R2, {
       edition: edition as any,
       matters: matters as any[]
-    });
+    }, c.env.DB);
     
     // Retornar HTML diretamente para download
     const filename = `diario-oficial-${edition.edition_number.replace(/\//g, '-')}-${edition.year}.html`;

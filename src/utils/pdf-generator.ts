@@ -50,7 +50,7 @@ interface PDFResult {
 /**
  * Gera o HTML completo da edição do Diário Oficial
  */
-function generateEditionHTML(data: EditionData, validationHash: string): string {
+function generateEditionHTML(data: EditionData, validationHash: string, logoUrl: string = ''): string {
   const { edition, matters } = data;
   
   // Formatar data para exibição
@@ -146,6 +146,13 @@ function generateEditionHTML(data: EditionData, validationHash: string): string 
       padding-bottom: 1.5rem;
       margin-bottom: 2rem;
       page-break-after: avoid;
+    }
+    
+    .edition-header .logo {
+      max-height: 120px;
+      max-width: 200px;
+      margin: 0 auto 1rem auto;
+      display: block;
     }
     
     .edition-header h1 {
@@ -296,6 +303,13 @@ function generateEditionHTML(data: EditionData, validationHash: string): string 
       page-break-inside: avoid;
     }
     
+    .edition-footer .logo-footer {
+      max-height: 60px;
+      max-width: 100px;
+      margin: 0 auto 0.5rem auto;
+      display: block;
+    }
+    
     .edition-footer p {
       margin-bottom: 0.3rem;
     }
@@ -345,6 +359,7 @@ function generateEditionHTML(data: EditionData, validationHash: string): string 
 </head>
 <body>
   <header class="edition-header">
+    ${logoUrl ? `<img src="${logoUrl}" alt="Logo da Prefeitura" class="logo">` : ''}
     <h1>Diário Oficial Municipal</h1>
     <div class="edition-info">
       <p><strong>Edição Nº:</strong> ${edition.edition_number}</p>
@@ -358,6 +373,7 @@ function generateEditionHTML(data: EditionData, validationHash: string): string 
   </main>
   
   <footer class="edition-footer">
+    ${logoUrl ? `<img src="${logoUrl}" alt="Logo da Prefeitura" class="logo-footer">` : ''}
     <p><strong>Diário Oficial Municipal</strong></p>
     <p>Edição ${edition.edition_number} - ${edition.year}</p>
     <p>Publicado em: ${editionDate.toLocaleDateString('pt-BR')}</p>
@@ -403,14 +419,31 @@ async function generateEditionHash(edition: any, matters: any[]): Promise<string
  */
 export async function generateEditionPDF(
   r2Bucket: R2Bucket,
-  data: EditionData
+  data: EditionData,
+  db: D1Database
 ): Promise<PDFResult> {
   try {
+    // Buscar logo da prefeitura do sistema de configurações
+    let logoUrl = '';
+    try {
+      const logoSetting = await db.prepare(
+        "SELECT value FROM system_settings WHERE key = 'logo_url'"
+      ).first();
+      
+      if (logoSetting && logoSetting.value) {
+        // O value está em JSON, precisa fazer parse
+        logoUrl = JSON.parse(logoSetting.value as string);
+      }
+    } catch (logoError) {
+      console.warn('Logo não encontrado nas configurações:', logoError);
+      // Continua sem logo se não encontrar
+    }
+    
     // Gerar hash do conteúdo PRIMEIRO
     const contentHash = await generateEditionHash(data.edition, data.matters);
     
-    // Gerar HTML da edição com o hash já calculado
-    const htmlContent = generateEditionHTML(data, contentHash);
+    // Gerar HTML da edição com o hash já calculado e o logo
+    const htmlContent = generateEditionHTML(data, contentHash, logoUrl);
     
     // Nome do arquivo
     const filename = `diario-oficial-${data.edition.edition_number.replace(/\//g, '-')}-${data.edition.year}.html`;
