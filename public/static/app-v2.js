@@ -2107,6 +2107,9 @@ function closeUserModal() {
 
 async function editUser(id) {
     try {
+        console.log('✅ FUNÇÃO EDITUSER DO APP-V2.JS CARREGADA!');
+        alert('✅ Usando código NOVO (app-v2.js) - Nome e perfil serão enviados!');
+        
         // Buscar secretarias para o select
         const { data: secretariasData } = await api.get('/secretarias');
         const secretarias = secretariasData.secretarias || [];
