@@ -401,11 +401,18 @@ async function loadDashboard(container) {
         </div>
         
         <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="text-lg font-semibold text-gray-800 mb-4">
-                <i class="fas fa-history mr-2"></i>Atividades Recentes
-            </h3>
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold text-gray-800">
+                    <i class="fas fa-history mr-2"></i>Atividades Recentes
+                </h3>
+                ${matters.matters.length > 10 ? `
+                    <button onclick="loadView('myMatters')" class="text-sm text-blue-600 hover:text-blue-800">
+                        Ver todas (${matters.matters.length}) →
+                    </button>
+                ` : ''}
+            </div>
             <div class="space-y-3">
-                ${matters.matters.slice(0, 5).map(m => `
+                ${matters.matters.slice(0, 10).map(m => `
                     <div class="flex items-center justify-between py-2 border-b border-gray-100">
                         <div>
                             <p class="font-medium text-gray-800">${m.title}</p>
@@ -1051,12 +1058,15 @@ function loadNewMatterForm(container, matterId = null) {
             
             <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">Conteúdo *</label>
+                <div 
+                    id="matterContentEditor"
+                    class="bg-white border border-gray-300 rounded-lg"
+                    style="min-height: 300px;"
+                ></div>
                 <textarea 
                     id="matterContent"
+                    class="hidden"
                     required
-                    rows="12"
-                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono text-sm"
-                    placeholder="Digite o conteúdo completo da matéria"
                 ></textarea>
             </div>
             
@@ -1141,6 +1151,32 @@ function loadNewMatterForm(container, matterId = null) {
         </form>
     `;
     
+    // Initialize Quill WYSIWYG editor
+    const quillEditor = new Quill('#matterContentEditor', {
+        theme: 'snow',
+        modules: {
+            toolbar: [
+                [{ 'header': [1, 2, 3, false] }],
+                ['bold', 'italic', 'underline', 'strike'],
+                [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+                [{ 'indent': '-1'}, { 'indent': '+1' }],
+                [{ 'align': [] }],
+                ['link', 'blockquote', 'code-block'],
+                ['clean']
+            ]
+        },
+        placeholder: 'Digite o conteúdo completo da matéria...'
+    });
+    
+    // Sync Quill content to hidden textarea
+    quillEditor.on('text-change', function() {
+        const html = quillEditor.root.innerHTML;
+        document.getElementById('matterContent').value = html;
+    });
+    
+    // Store editor instance globally for access in other functions
+    window.currentQuillEditor = quillEditor;
+    
     // Load matter data if editing
     if (matterId) {
         loadMatterForEdit(matterId);
@@ -1160,6 +1196,11 @@ async function loadMatterForEdit(id) {
         document.getElementById('matterSummary').value = matter.summary || '';
         document.getElementById('matterContent').value = matter.content;
         document.getElementById('matterObservations').value = matter.observations || '';
+        
+        // Load content into Quill editor
+        if (window.currentQuillEditor && matter.content) {
+            window.currentQuillEditor.root.innerHTML = matter.content;
+        }
     } catch (error) {
         alert('Erro ao carregar matéria: ' + error.message);
         loadView('myMatters');
