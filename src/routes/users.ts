@@ -143,7 +143,11 @@ users.put('/:id', async (c) => {
   try {
     const admin = c.get('user');
     const id = parseInt(c.req.param('id'));
-    const { name, email, cpf, role, secretaria_id, active } = await c.req.json();
+    const bodyData = await c.req.json();
+    const { name, email, cpf, role, secretaria_id, active } = bodyData;
+    
+    // DEBUG: Log dos dados recebidos
+    console.log('PUT /api/users/:id - Dados recebidos:', JSON.stringify(bodyData));
     
     // Verificar se usuário existe
     const user = await c.env.DB.prepare(
@@ -161,8 +165,17 @@ users.put('/:id', async (c) => {
     
     // Garantir que secretaria_id seja null se não fornecido ou vazio
     const finalSecretariaId = (secretaria_id !== undefined && secretaria_id !== null && secretaria_id !== '') 
-      ? secretaria_id 
+      ? parseInt(String(secretaria_id)) 
       : null;
+    
+    // Garantir que active seja 0 ou 1
+    const finalActive = (active === true || active === 1 || active === '1') ? 1 : 0;
+    
+    console.log('PUT /api/users/:id - Valores finais:', {
+      name, email, cpf: cpf || null, role, 
+      secretaria_id: finalSecretariaId, 
+      active: finalActive
+    });
     
     // Atualizar usuário
     await c.env.DB.prepare(`
@@ -170,7 +183,7 @@ users.put('/:id', async (c) => {
       SET name = ?, email = ?, cpf = ?, role = ?, 
           secretaria_id = ?, active = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).bind(name, email, cpf || null, role, finalSecretariaId, active !== undefined ? active : 1, id).run();
+    `).bind(name, email, cpf || null, role, finalSecretariaId, finalActive, id).run();
     
     // Log de auditoria
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';

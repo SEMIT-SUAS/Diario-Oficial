@@ -737,8 +737,8 @@ app.get('/', (c) => {
 
     <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
-    <script src="/static/webgl-init.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/webgl-init.js?v=${Date.now()}"></script>
+    <script src="/static/app.js?v=${Date.now()}"></script>
 </body>
 </html>
   `);
