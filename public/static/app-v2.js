@@ -3862,7 +3862,10 @@ async function publishEdition(id) {
     
     try {
         const { data } = await api.post(`/editions/${id}/publish`);
-        alert(`Edição publicada com sucesso!\n\nPDF gerado: ${data.total_pages} página(s)\nHash: ${data.pdf_hash.substring(0, 16)}...`);
+        alert(`Edição publicada com sucesso!\n\nPDF gerado: ${data.total_pages} página(s)\nHash: ${data.pdf_hash.substring(0, 16)}...\n\n📥 O download do PDF irá iniciar automaticamente!`);
+        
+        // 📥 BAIXAR PDF AUTOMATICAMENTE após publicar
+        await downloadEditionPDF(id, data.edition_number, data.year);
         
         // Force reload of editions view
         await loadView('editions');
