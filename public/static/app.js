@@ -135,6 +135,14 @@ function showLogin() {
 // Show dashboard
 async function showDashboard() {
     try {
+        // Check if user is logged in
+        const token = localStorage.getItem('token');
+        if (!token) {
+            console.log('No token found, redirecting to login');
+            showLogin();
+            return;
+        }
+        
         // Load user data
         if (!state.user) {
             const { data } = await api.get('/auth/me');
@@ -1979,8 +1987,19 @@ async function showNewUserModal() {
     document.getElementById('userForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         
-        const role = document.getElementById('userRole').value;
-        const secretariaId = document.getElementById('userSecretaria').value;
+        const nameInput = document.getElementById('userName');
+        const emailInput = document.getElementById('userEmail');
+        const cpfInput = document.getElementById('userCpf');
+        const passwordInput = document.getElementById('userPassword');
+        const roleInput = document.getElementById('userRole');
+        const secretariaInput = document.getElementById('userSecretaria');
+        
+        console.log('Form elements:', {
+            nameInput, emailInput, passwordInput, roleInput, secretariaInput
+        });
+        
+        const role = roleInput?.value || '';
+        const secretariaId = secretariaInput?.value || '';
         
         // Validação adicional
         if (role === 'secretaria' && !secretariaId) {
@@ -1988,13 +2007,18 @@ async function showNewUserModal() {
             return;
         }
         
-        const nameValue = document.getElementById('userName')?.value;
-        const emailValue = document.getElementById('userEmail')?.value;
-        const cpfValue = document.getElementById('userCpf')?.value;
-        const passwordValue = document.getElementById('userPassword')?.value;
+        const nameValue = nameInput?.value?.trim() || '';
+        const emailValue = emailInput?.value?.trim() || '';
+        const cpfValue = cpfInput?.value?.trim() || '';
+        const passwordValue = passwordInput?.value || '';
+        
+        console.log('Form values:', {
+            nameValue, emailValue, passwordValue, role, secretariaId
+        });
         
         if (!nameValue || !emailValue || !passwordValue) {
             alert('Nome, email e senha são obrigatórios');
+            console.error('Validation failed:', { nameValue, emailValue, passwordValue });
             return;
         }
         
@@ -3203,7 +3227,7 @@ async function viewEdition(id) {
                                 <button onclick="downloadEditionPDF(${data.id}, '${data.edition_number}', ${data.year})" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg">
                                     <i class="fas fa-file-pdf mr-2"></i>Download PDF/HTML
                                 </button>
-                                <button onclick="window.open('/api/verification', '_blank')" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg">
+                                <button onclick="loadView('verificar')" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg">
                                     <i class="fas fa-shield-alt mr-2"></i>Verificar Autenticidade
                                 </button>
                             </div>
