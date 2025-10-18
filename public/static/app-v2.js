@@ -3862,10 +3862,16 @@ async function publishEdition(id) {
     
     try {
         const { data } = await api.post(`/editions/${id}/publish`);
-        alert(`Edição publicada com sucesso!\n\nPDF gerado: ${data.total_pages} página(s)\nHash: ${data.pdf_hash.substring(0, 16)}...\n\n📥 O download do PDF irá iniciar automaticamente!`);
         
         // 📥 BAIXAR PDF AUTOMATICAMENTE após publicar
-        await downloadEditionPDF(id, data.edition_number, data.year);
+        const downloadSuccess = await downloadEditionPDF(id, data.edition_number, data.year);
+        
+        // Mensagem de sucesso (ajustada conforme download)
+        if (downloadSuccess) {
+            alert(`✅ Edição publicada com sucesso!\n\n📊 PDF gerado: ${data.total_pages} página(s)\n🔐 Hash: ${data.pdf_hash.substring(0, 16)}...\n\n📥 O arquivo foi baixado automaticamente!`);
+        } else {
+            alert(`✅ Edição publicada com sucesso!\n\n📊 PDF gerado: ${data.total_pages} página(s)\n🔐 Hash: ${data.pdf_hash.substring(0, 16)}...\n\n⚠️ Houve um problema ao baixar automaticamente.\n\nVocê pode baixar manualmente clicando no botão de download na lista de edições.`);
+        }
         
         // Force reload of editions view
         await loadView('editions');
@@ -4122,6 +4128,8 @@ async function verifyMatterSignature() {
 
 async function downloadEditionPDF(editionId, editionNumber, year) {
     try {
+        console.log(`📥 Iniciando download da edição ${editionNumber}/${year}`);
+        
         // Tentar baixar PDF/HTML do backend
         const response = await fetch(`/api/editions/${editionId}/pdf`, {
             headers: {
@@ -4130,7 +4138,9 @@ async function downloadEditionPDF(editionId, editionNumber, year) {
         });
         
         if (!response.ok) {
-            throw new Error('Erro ao baixar arquivo');
+            const errorData = await response.json().catch(() => null);
+            const errorMsg = errorData?.error || `Erro HTTP ${response.status}`;
+            throw new Error(errorMsg);
         }
         
         // Detectar tipo de conteúdo
@@ -4138,7 +4148,11 @@ async function downloadEditionPDF(editionId, editionNumber, year) {
         const isPDF = contentType && contentType.includes('pdf');
         const extension = isPDF ? 'pdf' : 'html';
         
+        console.log(`📄 Tipo de arquivo: ${extension.toUpperCase()}`);
+        
         const blob = await response.blob();
+        console.log(`💾 Tamanho do arquivo: ${(blob.size / 1024).toFixed(2)} KB`);
+        
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -4148,16 +4162,21 @@ async function downloadEditionPDF(editionId, editionNumber, year) {
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
         
-        // Informar ao usuário
+        console.log('✅ Download iniciado com sucesso!');
+        
+        // Informar ao usuário sobre HTML
         if (!isPDF) {
             setTimeout(() => {
                 alert('📄 Arquivo HTML baixado com sucesso!\n\nPara converter em PDF:\n1. Abra o arquivo no navegador\n2. Use Ctrl+P ou Cmd+P\n3. Escolha "Salvar como PDF"');
             }, 500);
         }
         
+        return true;
+        
     } catch (error) {
-        console.error('Download error:', error);
-        alert('Erro ao baixar arquivo: ' + error.message);
+        console.error('❌ Erro no download:', error);
+        alert('❌ Erro ao baixar arquivo:\n\n' + error.message + '\n\nVerifique o console (F12) para mais detalhes.');
+        return false;
     }
 }
 
