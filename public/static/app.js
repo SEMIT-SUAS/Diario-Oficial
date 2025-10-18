@@ -32,9 +32,8 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
     response => response,
     error => {
-        // Apenas fazer logout se for erro 401 na rota /auth/me ou /auth/login
-        if (error.response?.status === 401 && 
-            (error.config.url.includes('/auth/me') || error.config.url.includes('/auth/login'))) {
+        // Fazer logout APENAS em 401 do /auth/me, NÃO no /auth/login
+        if (error.response?.status === 401 && error.config.url.includes('/auth/me')) {
             logout();
         }
         return Promise.reject(error);
