@@ -253,23 +253,26 @@ npm install
 - ✅ Responsive design
 - ✅ Documentação completa
 
-### Melhorias Recentes (Outubro 2025)
-- ✅ **Download automático de PDF** após publicar edição
-- ✅ **Logo do município** no cabeçalho do PDF
-- ✅ **Índice reorganizado** por Secretaria > Tipo > Matérias
-- ✅ **EXPEDIENTE** impresso no PDF
-- ✅ **"Publicado por: Nome - Sigla"** nas matérias
-- ✅ **Links de anexos** ao fim de cada matéria
-- ✅ **Excluir usuários** no CRUD (hard delete)
-- ✅ **Feedback detalhado** durante download (console logs)
-- ✅ **Tratamento de erros** robusto no download
+### 🚀 Melhorias Implementadas (Outubro 2025) - **11/11 CONCLUÍDAS!**
 
-### Em Desenvolvimento
-- ⏳ Editor de texto rico (WYSIWYG) para descrições
-- ⏳ Edições suplementares incrementais automáticas
-- ⏳ Botões de pré-visualização de PDF
-- ⏳ Dashboard limitado (últimos 10 itens + paginação)
-- ⏳ Filtros de status na pesquisa (rascunho, enviado, aprovado, publicado)
+#### 📄 PDF Avançado
+- ✅ **Logo do município** no cabeçalho (busca das configurações)
+- ✅ **Índice reorganizado** por Secretaria > Tipo > Matérias
+- ✅ **EXPEDIENTE** impresso após cabeçalho
+- ✅ **"Publicado por: Nome - Sigla"** (substituiu "Responsável")
+- ✅ **Links de anexos** ao fim de cada matéria
+- ✅ **Download automático** após publicar
+- ✅ **Pré-visualização** para edições em rascunho
+
+#### 📋 Edições e Gestão
+- ✅ **Edições suplementares** com referência automática ao diário do dia
+- ✅ **Numeração incremental** automática (normal: 001/2025, suplementar: 001-A/2025)
+- ✅ **Excluir usuários** no CRUD (hard delete com confirmação dupla)
+
+#### ✏️ Editor e Interface
+- ✅ **Editor WYSIWYG** (Quill.js) para conteúdo de matérias
+- ✅ **Dashboard otimizado** (últimos 10 itens + link "Ver todas")
+- ✅ **Filtros de status** completos (rascunho, enviado, aprovado, rejeitado, publicado)
 
 ## 📄 LICENÇA
 
