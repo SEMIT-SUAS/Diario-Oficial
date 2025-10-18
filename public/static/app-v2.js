@@ -1941,6 +1941,9 @@ async function loadUsersManagement(container) {
                                             <button onclick="toggleUserStatus(${user.id}, ${user.active})" class="text-yellow-600 hover:text-yellow-900" title="${user.active ? 'Desativar' : 'Ativar'}">
                                                 <i class="fas fa-${user.active ? 'ban' : 'check'}"></i>
                                             </button>
+                                            <button onclick="deleteUser(${user.id}, '${user.name}')" class="text-red-600 hover:text-red-900" title="Excluir usuário">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
                                         ` : ''}
                                     </td>
                                 </tr>
@@ -2346,15 +2349,31 @@ async function toggleUserStatus(id, currentStatus) {
     }
     
     try {
-        if (currentStatus) {
-            await api.delete(`/users/${id}`);
-        } else {
-            await api.put(`/users/${id}`, { active: 1 });
-        }
+        // Atualizar status ativo/inativo (não excluir)
+        await api.put(`/users/${id}`, { active: currentStatus ? 0 : 1 });
         alert(`Usuário ${action === 'desativar' ? 'desativado' : 'ativado'} com sucesso!`);
         loadView('users');
     } catch (error) {
         alert(error.response?.data?.error || `Erro ao ${action} usuário`);
+    }
+}
+
+async function deleteUser(id, userName) {
+    if (!confirm(`⚠️ ATENÇÃO: Tem certeza que deseja EXCLUIR permanentemente o usuário "${userName}"?\n\nEsta ação NÃO pode ser desfeita!`)) {
+        return;
+    }
+    
+    // Confirmação dupla para segurança
+    if (!confirm(`Digite SIM para confirmar a exclusão do usuário "${userName}"`)) {
+        return;
+    }
+    
+    try {
+        await api.delete(`/users/${id}`);
+        alert(`Usuário "${userName}" excluído com sucesso!`);
+        loadView('users');
+    } catch (error) {
+        alert(error.response?.data?.error || 'Erro ao excluir usuário');
     }
 }
 

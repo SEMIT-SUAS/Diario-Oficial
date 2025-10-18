@@ -306,9 +306,10 @@ users.delete('/:id', async (c) => {
       return c.json({ error: 'Usuário não encontrado' }, 404);
     }
     
-    // Desativar usuário (soft delete)
+    // EXCLUIR usuário permanentemente (hard delete)
+    // AVISO: Isso remove o usuário completamente do banco de dados
     await c.env.DB.prepare(
-      'UPDATE users SET active = 0, updated_at = datetime(\'now\') WHERE id = ?'
+      'DELETE FROM users WHERE id = ?'
     ).bind(id).run();
     
     // Log de auditoria
