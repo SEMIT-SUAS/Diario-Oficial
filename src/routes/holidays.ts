@@ -72,7 +72,7 @@ holidays.get('/:id', async (c) => {
 holidays.post('/', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
-    const { date, name, type, is_recurring, description } = await c.req.json();
+    const { date, name, type, is_recurring } = await c.req.json();
     
     if (!date || !name || !type) {
       return c.json({ error: 'Data, nome e tipo são obrigatórios' }, 400);
@@ -93,16 +93,20 @@ holidays.post('/', requireRole('admin'), async (c) => {
       return c.json({ error: 'Já existe um feriado cadastrado nesta data' }, 400);
     }
     
+    // Extrair ano da data
+    const year = new Date(date + 'T00:00:00').getFullYear();
+    
     const result = await c.env.DB.prepare(`
       INSERT INTO holidays (
-        date, name, type, is_recurring, description, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        date, name, type, recurring, year, active, created_at, created_by
+      ) VALUES (?, ?, ?, ?, ?, 1, datetime('now'), ?)
     `).bind(
       date,
       name,
       type,
       is_recurring ? 1 : 0,
-      description || null
+      year,
+      user.id
     ).run();
     
     // Audit log
@@ -143,7 +147,7 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
     const id = parseInt(c.req.param('id'));
-    const { date, name, type, is_recurring, description } = await c.req.json();
+    const { date, name, type, is_recurring } = await c.req.json();
     
     // Verificar se existe
     const existing = await c.env.DB.prepare(
@@ -173,21 +177,24 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
       }
     }
     
+    // Calcular novo ano se data mudar
+    const finalDate = date || existing.date;
+    const year = new Date(finalDate + 'T00:00:00').getFullYear();
+    
     await c.env.DB.prepare(`
       UPDATE holidays 
       SET date = ?,
           name = ?,
           type = ?,
-          is_recurring = ?,
-          description = ?,
-          updated_at = datetime('now')
+          recurring = ?,
+          year = ?
       WHERE id = ?
     `).bind(
-      date || existing.date,
+      finalDate,
       name || existing.name,
       type || existing.type,
-      is_recurring !== undefined ? (is_recurring ? 1 : 0) : existing.is_recurring,
-      description !== undefined ? description : existing.description,
+      is_recurring !== undefined ? (is_recurring ? 1 : 0) : existing.recurring,
+      year,
       id
     ).run();
     
@@ -206,7 +213,7 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
       id,
       'update',
       JSON.stringify(existing),
-      JSON.stringify({ date, name, type, is_recurring, description }),
+      JSON.stringify({ date, name, type, is_recurring }),
       ipAddress,
       userAgent
     ).run();

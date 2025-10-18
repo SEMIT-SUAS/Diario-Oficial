@@ -994,6 +994,49 @@ function loadNewMatterForm(container, matterId = null) {
                 ></textarea>
             </div>
             
+            <div class="border-t border-gray-200 pt-4">
+                <div class="flex items-center space-x-2">
+                    <input 
+                        type="checkbox" 
+                        id="hasAttachments"
+                        onchange="toggleAttachmentsSection()"
+                        class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    >
+                    <label for="hasAttachments" class="text-sm font-medium text-gray-700">
+                        Esta matéria possui anexos
+                    </label>
+                </div>
+                
+                <div id="attachmentsSection" style="display: none;" class="mt-4 p-4 bg-gray-50 rounded-lg">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        <i class="fas fa-paperclip mr-1"></i>Upload de Anexos
+                    </label>
+                    
+                    <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
+                        <input 
+                            type="file" 
+                            id="matterAttachments"
+                            multiple
+                            accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"
+                            class="hidden"
+                            onchange="handleAttachmentSelection()"
+                        >
+                        <button 
+                            type="button"
+                            onclick="document.getElementById('matterAttachments').click()"
+                            class="bg-blue-100 hover:bg-blue-200 text-blue-700 px-4 py-2 rounded-lg transition"
+                        >
+                            <i class="fas fa-upload mr-2"></i>Escolher Arquivos
+                        </button>
+                        <p class="text-xs text-gray-500 mt-2">
+                            Formatos aceitos: PDF, DOC, DOCX, XLS, XLSX, JPG, PNG (máx. 10MB cada)
+                        </p>
+                    </div>
+                    
+                    <div id="selectedFilesList" class="mt-4 space-y-2"></div>
+                </div>
+            </div>
+            
             <div class="flex flex-wrap gap-3">
                 <button 
                     type="button"
@@ -1117,6 +1160,106 @@ async function saveMatter(submitForReview) {
     } catch (error) {
         alert(error.response?.data?.error || 'Erro ao salvar matéria');
     }
+}
+
+// Toggle attachments section
+function toggleAttachmentsSection() {
+    const checkbox = document.getElementById('hasAttachments');
+    const section = document.getElementById('attachmentsSection');
+    
+    if (checkbox.checked) {
+        section.style.display = 'block';
+    } else {
+        section.style.display = 'none';
+        // Clear files when unchecked
+        document.getElementById('matterAttachments').value = '';
+        document.getElementById('selectedFilesList').innerHTML = '';
+    }
+}
+
+// Handle attachment file selection
+function handleAttachmentSelection() {
+    const input = document.getElementById('matterAttachments');
+    const filesList = document.getElementById('selectedFilesList');
+    const files = Array.from(input.files);
+    
+    if (files.length === 0) {
+        filesList.innerHTML = '';
+        return;
+    }
+    
+    // Validate file sizes (10MB max per file)
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    const invalidFiles = files.filter(f => f.size > maxSize);
+    
+    if (invalidFiles.length > 0) {
+        alert(`Os seguintes arquivos excedem o tamanho máximo de 10MB:\n${invalidFiles.map(f => f.name).join('\n')}`);
+        input.value = '';
+        filesList.innerHTML = '';
+        return;
+    }
+    
+    // Display selected files
+    filesList.innerHTML = files.map((file, index) => `
+        <div class="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg">
+            <div class="flex items-center space-x-3">
+                <i class="fas fa-file-${getFileIcon(file.name)} text-blue-600"></i>
+                <div>
+                    <p class="text-sm font-medium text-gray-800">${file.name}</p>
+                    <p class="text-xs text-gray-500">${formatFileSize(file.size)}</p>
+                </div>
+            </div>
+            <button 
+                type="button"
+                onclick="removeAttachment(${index})"
+                class="text-red-600 hover:text-red-800"
+                title="Remover arquivo"
+            >
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    `).join('');
+}
+
+// Remove individual attachment
+function removeAttachment(index) {
+    const input = document.getElementById('matterAttachments');
+    const dt = new DataTransfer();
+    const files = Array.from(input.files);
+    
+    files.forEach((file, i) => {
+        if (i !== index) {
+            dt.items.add(file);
+        }
+    });
+    
+    input.files = dt.files;
+    handleAttachmentSelection();
+}
+
+// Get file icon based on extension
+function getFileIcon(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    const icons = {
+        'pdf': 'pdf',
+        'doc': 'word',
+        'docx': 'word',
+        'xls': 'excel',
+        'xlsx': 'excel',
+        'jpg': 'image',
+        'jpeg': 'image',
+        'png': 'image'
+    };
+    return icons[ext] || 'alt';
+}
+
+// Format file size for display
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
 }
 
 async function editMatter(id) {

@@ -137,10 +137,10 @@ settings.put('/:key', requireRole('admin'), async (c) => {
 settings.post('/', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
-    const { category, key, value, value_type, description } = await c.req.json();
+    const { key, value, description } = await c.req.json();
     
-    if (!category || !key || value === undefined) {
-      return c.json({ error: 'Categoria, chave e valor são obrigatórios' }, 400);
+    if (!key || value === undefined) {
+      return c.json({ error: 'Chave e valor são obrigatórios' }, 400);
     }
     
     // Verificar se já existe
@@ -154,14 +154,11 @@ settings.post('/', requireRole('admin'), async (c) => {
     
     await c.env.DB.prepare(`
       INSERT INTO system_settings (
-        category, key, value, value_type, description,
-        created_at, updated_at, updated_by
-      ) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?)
+        key, value, description, updated_at, updated_by
+      ) VALUES (?, ?, ?, datetime('now'), ?)
     `).bind(
-      category,
       key,
       JSON.stringify(value),
-      value_type || 'string',
       description || null,
       user.id
     ).run();
@@ -201,8 +198,8 @@ settings.post('/logo/upload', requireRole('admin'), async (c) => {
     
     // Salvar nas configurações
     await c.env.DB.prepare(`
-      INSERT INTO system_settings (category, key, value, value_type, description, created_at, updated_at, updated_by)
-      VALUES ('branding', 'logo_url', ?, 'string', 'Logo da Prefeitura (Base64)', datetime('now'), datetime('now'), ?)
+      INSERT INTO system_settings (key, value, description, updated_at, updated_by)
+      VALUES ('logo_url', ?, 'Logo da Prefeitura (Base64)', datetime('now'), ?)
       ON CONFLICT(key) DO UPDATE SET
         value = excluded.value,
         updated_at = datetime('now'),
@@ -243,6 +240,80 @@ settings.get('/logo', async (c) => {
   } catch (error: any) {
     console.error('Error fetching logo:', error);
     return c.json({ error: 'Erro ao buscar logo', details: error.message }, 500);
+  }
+});
+
+/**
+ * POST /api/settings/bulk
+ * Atualiza múltiplas configurações de uma vez
+ */
+settings.post('/bulk', requireRole('admin'), async (c) => {
+  try {
+    const user = c.get('user');
+    const { settings: settingsToUpdate } = await c.req.json();
+    
+    if (!Array.isArray(settingsToUpdate) || settingsToUpdate.length === 0) {
+      return c.json({ error: 'Array de configurações é obrigatório' }, 400);
+    }
+    
+    // Atualizar cada configuração
+    let updated = 0;
+    let errors = [];
+    
+    for (const setting of settingsToUpdate) {
+      const { key, value } = setting;
+      
+      if (!key || value === undefined) {
+        errors.push({ key: key || 'unknown', error: 'Chave e valor são obrigatórios' });
+        continue;
+      }
+      
+      try {
+        // Verificar se existe
+        const existing = await c.env.DB.prepare(
+          'SELECT * FROM system_settings WHERE key = ?'
+        ).bind(key).first();
+        
+        if (existing) {
+          // Atualizar existente
+          await c.env.DB.prepare(`
+            UPDATE system_settings 
+            SET value = ?,
+                updated_at = datetime('now'),
+                updated_by = ?
+            WHERE key = ?
+          `).bind(
+            JSON.stringify(value),
+            user.id,
+            key
+          ).run();
+          updated++;
+        } else {
+          // Criar novo se não existe
+          await c.env.DB.prepare(`
+            INSERT INTO system_settings (key, value, updated_at, updated_by)
+            VALUES (?, ?, datetime('now'), ?)
+          `).bind(
+            key,
+            JSON.stringify(value),
+            user.id
+          ).run();
+          updated++;
+        }
+      } catch (err: any) {
+        errors.push({ key, error: err.message });
+      }
+    }
+    
+    return c.json({ 
+      message: `${updated} configuração(ões) atualizada(s) com sucesso`,
+      updated,
+      errors: errors.length > 0 ? errors : undefined
+    });
+    
+  } catch (error: any) {
+    console.error('Error bulk updating settings:', error);
+    return c.json({ error: 'Erro ao atualizar configurações', details: error.message }, 500);
   }
 });
 
