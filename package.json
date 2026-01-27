@@ -2,13 +2,15 @@
   "name": "dom",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/init-db.js && vite",
+    "dev:pg": "node scripts/init-db.js && tsx src/server-pg.ts",
     "dev:sandbox": "wrangler pages dev dist --d1=dom-production --local --ip 0.0.0.0 --port 3000",
     "build": "vite build",
     "preview": "wrangler pages dev dist",
     "deploy": "npm run build && wrangler pages deploy dist",
     "deploy:prod": "npm run build && wrangler pages deploy dist --project-name dom",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "db:init": "node scripts/init-db.js",
     "db:migrate:local": "wrangler d1 migrations apply dom-production --local",
     "db:migrate:prod": "wrangler d1 migrations apply dom-production",
     "db:seed": "wrangler d1 execute dom-production --local --file=./seed.sql",
@@ -20,14 +22,22 @@
     "git:commit": "git add . && git commit -m"
   },
   "dependencies": {
-    "hono": "^4.10.1"
+    "hono": "^4.10.1",
+    "pg": "^8.11.3",
+    "dotenv": "^16.3.1",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250705.0",
     "@hono/vite-build": "^1.2.0",
     "@hono/vite-dev-server": "^0.18.2",
+    "@types/pg": "^8.10.9",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.5",
     "vite": "^6.3.5",
     "wrangler": "^4.4.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "tsx": "^4.7.0"
   }
 }
