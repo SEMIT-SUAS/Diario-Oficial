@@ -1,6 +1,5 @@
 {
   "name": "dom",
-  "type": "module",
   "scripts": {
     "dev": "node scripts/init-db.js && vite",
     "dev:pg": "node scripts/init-db.js && tsx src/server-pg.ts",
