@@ -168,16 +168,17 @@ export interface AuditLog {
   created_at: string;
 }
 
-// Bindings para Cloudflare
+// ✅ CORRIGIDO: Remove Cloudflare Bindings para PostgreSQL local
 export type Bindings = {
-  DB: D1Database;
-  R2: R2Bucket;
-}
+  // REMOVA D1Database e R2Bucket
+  // DB: D1Database;  // REMOVER
+  // R2: R2Bucket;    // REMOVER
+};
 
-// Context type para Hono
+// ✅ CORRIGIDO: Context type para PostgreSQL local
 export type HonoContext = {
-  Bindings: Bindings;
+  Bindings: {};  // Vazio para PostgreSQL local
   Variables: {
     user?: User;
   };
-}
+};
