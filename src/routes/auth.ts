@@ -92,9 +92,11 @@ auth.post('/login', async (c) => {
     }
     
     console.log('✅ Usuário encontrado:', { id: user.id, name: user.name, role: user.role });
+    console.log('TESTANDO SENHA', password, user.password_hash );
     
     // Verificar senha
     const isValidPassword = await verifyPassword(password, user.password_hash);
+    
     
     console.log('🔐 Verificação de senha:', isValidPassword ? '✅ Válida' : '❌ Inválida');
     
