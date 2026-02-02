@@ -1,25 +1,53 @@
 {
   "name": "dom",
+  "version": "1.0.0",
+  "description": "DOM - Diário Oficial Municipal - Sistema de gestão de publicações oficiais",
+  "main": "backend.ts",
   "scripts": {
-    "dev": "node scripts/init-db.js && vite",
-    "dev:pg": "node scripts/init-db.js && tsx src/server-pg.ts",
-    "dev:sandbox": "wrangler pages dev dist --d1=dom-production --local --ip 0.0.0.0 --port 3000",
+    "dev": "vite",
+    "server": "tsx src/server-pg.ts",
+    "api": "tsx backend.ts",
+    "start": "concurrently \"npm run server\" \"npm run dev\"",
+    "start:api": "npm run server",
+    "start:front": "npm run dev",
     "build": "vite build",
-    "preview": "wrangler pages dev dist",
+    "preview": "vite preview",
+    "db:init": "node scripts/init-db.js",
+    "db:reset": "npm run db:init",
+    "db:check": "tsx -e \"import { testConnection } from './src/config/database'; testConnection().then(console.log).catch(console.error)\"",
+    "db:console": "psql -U postgres -d dom_database",
+    "clean": "rm -rf dist node_modules/.cache",
+    "clean:all": "rm -rf dist node_modules package-lock.json yarn.lock",
+    "install:clean": "npm run clean:all && npm install",
+    "test:api": "curl http://localhost:3001/api/health",
+    "test:front": "curl http://localhost:3000",
+    "test:login": "curl -X POST http://localhost:3001/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@municipio.gov.br\",\"password\":\"admin123\"}'",
+    "dev:pg": "echo \"Use: npm run server (não inicializa banco) ou npm run db:init (inicializa banco)\"",
+    "dev:sandbox": "wrangler pages dev dist --d1=dom-production --local --ip 0.0.0.0 --port 3000",
     "deploy": "npm run build && wrangler pages deploy dist",
     "deploy:prod": "npm run build && wrangler pages deploy dist --project-name dom",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
-    "db:init": "node scripts/init-db.js",
     "db:migrate:local": "wrangler d1 migrations apply dom-production --local",
     "db:migrate:prod": "wrangler d1 migrations apply dom-production",
     "db:seed": "wrangler d1 execute dom-production --local --file=./seed.sql",
-    "db:reset": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local && npm run db:seed",
+    "db:reset:old": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local && npm run db:seed",
     "db:console:local": "wrangler d1 execute dom-production --local",
     "db:console:prod": "wrangler d1 execute dom-production",
     "clean-port": "fuser -k 3000/tcp 2>/dev/null || true",
     "test": "curl http://localhost:3000",
-    "git:commit": "git add . && git commit -m"
+    "git:commit": "git add . && git commit -m",
+    "help": "echo '\\n📋 COMANDOS DISPONÍVEIS:\\n  npm run server        - Inicia backend API (porta 3001)\\n  npm run dev           - Inicia frontend (porta 3000)\\n  npm start             - Inicia ambos (frontend + backend)\\n  npm run db:init       - Inicializa/recria banco de dados\\n  npm run db:reset      - Alias para db:init\\n  npm run test:api      - Testa API\\n  npm run test:login    - Testa login\\n'"
   },
+  "keywords": [
+    "dom",
+    "diario-oficial",
+    "municipal",
+    "hono",
+    "postgresql",
+    "react"
+  ],
+  "author": "Prefeitura Municipal",
+  "license": "MIT",
   "dependencies": {
     "@hono/vite-build": "^1.9.2",
     "@hono/vite-dev-server": "^0.24.1",
@@ -39,9 +67,22 @@
     "@types/react": "^19.2.10",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",
+    "concurrently": "^8.2.2",
     "tsx": "^4.7.0",
     "typescript": "^5.0.0",
     "vite": "^6.3.5",
     "wrangler": "^4.4.0"
-  }
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/seu-usuario/dom.git"
+  },
+  "bugs": {
+    "url": "https://github.com/seu-usuario/dom/issues"
+  },
+  "homepage": "https://github.com/seu-usuario/dom#readme"
 }

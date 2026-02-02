@@ -30,7 +30,7 @@ holidays.get('/', async (c) => {
     
     query += ' ORDER BY date ASC';
     
-    const stmt = c.env.DB.prepare(query);
+    const stmt = db.query(query);
     const { results } = await (params.length > 0 ? stmt.bind(...params) : stmt).all();
     
     // Mapear tipos do banco (português) para frontend (inglês)
@@ -63,7 +63,7 @@ holidays.get('/:id', async (c) => {
   try {
     const id = parseInt(c.req.param('id'));
     
-    const holiday = await c.env.DB.prepare(
+    const holiday = await db.query(
       'SELECT * FROM holidays WHERE id = ?'
     ).bind(id).first<any>();
     
@@ -122,7 +122,7 @@ holidays.post('/', requireRole('admin'), async (c) => {
     const dbType = typeMap[type] || type;
     
     // Verificar se já existe feriado nesta data
-    const existing = await c.env.DB.prepare(
+    const existing = await db.query(
       'SELECT id FROM holidays WHERE date = ?'
     ).bind(date).first();
     
@@ -133,7 +133,7 @@ holidays.post('/', requireRole('admin'), async (c) => {
     // Extrair ano da data
     const year = new Date(date + 'T00:00:00').getFullYear();
     
-    const result = await c.env.DB.prepare(`
+    const result = await db.query(`
       INSERT INTO holidays (
         date, name, type, recurring, year, active, created_at, created_by
       ) VALUES (?, ?, ?, ?, ?, 1, datetime('now'), ?)
@@ -150,7 +150,7 @@ holidays.post('/', requireRole('admin'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
@@ -187,7 +187,7 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
     const { date, name, type, is_recurring } = await c.req.json();
     
     // Verificar se existe
-    const existing = await c.env.DB.prepare(
+    const existing = await db.query(
       'SELECT * FROM holidays WHERE id = ?'
     ).bind(id).first<any>();
     
@@ -215,7 +215,7 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
     
     // Verificar conflito de data
     if (date && date !== existing.date) {
-      const dateConflict = await c.env.DB.prepare(
+      const dateConflict = await db.query(
         'SELECT id FROM holidays WHERE date = ? AND id != ?'
       ).bind(date, id).first();
       
@@ -228,7 +228,7 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
     const finalDate = date || existing.date;
     const year = new Date(finalDate + 'T00:00:00').getFullYear();
     
-    await c.env.DB.prepare(`
+    await db.query(`
       UPDATE holidays 
       SET date = ?,
           name = ?,
@@ -249,7 +249,7 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, new_values, ip_address, user_agent, created_at
@@ -283,7 +283,7 @@ holidays.delete('/:id', requireRole('admin'), async (c) => {
     const id = parseInt(c.req.param('id'));
     
     // Verificar se existe
-    const holiday = await c.env.DB.prepare(
+    const holiday = await db.query(
       'SELECT * FROM holidays WHERE id = ?'
     ).bind(id).first();
     
@@ -292,13 +292,13 @@ holidays.delete('/:id', requireRole('admin'), async (c) => {
     }
     
     // Deletar feriado
-    await c.env.DB.prepare('DELETE FROM holidays WHERE id = ?').bind(id).run();
+    await db.query('DELETE FROM holidays WHERE id = ?').bind(id).run();
     
     // Audit log
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, ip_address, user_agent, created_at

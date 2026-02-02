@@ -17,7 +17,7 @@ const secretarias = new Hono<HonoContext>();
 secretarias.get('/', async (c) => {
   try {
     // Apenas informações básicas para público
-    const { results } = await c.env.DB.prepare(`
+    const { results } = await db.query(`
       SELECT 
         s.id,
         s.name,
@@ -47,7 +47,7 @@ secretarias.get('/:id', requireRole('admin', 'semad'), async (c) => {
   try {
     const id = parseInt(c.req.param('id'));
     
-    const secretaria = await c.env.DB.prepare(`
+    const secretaria = await db.query(`
       SELECT s.* FROM secretarias s WHERE s.id = ?
     `).bind(id).first();
     
@@ -56,7 +56,7 @@ secretarias.get('/:id', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Buscar usuários da secretaria
-    const { results: users } = await c.env.DB.prepare(`
+    const { results: users } = await db.query(`
       SELECT id, name, email, role, active FROM users 
       WHERE secretaria_id = ?
       ORDER BY name ASC
@@ -87,7 +87,7 @@ secretarias.post('/', requireRole('admin'), async (c) => {
     }
     
     // Verificar se sigla já existe
-    const existing = await c.env.DB.prepare(
+    const existing = await db.query(
       'SELECT id FROM secretarias WHERE acronym = ?'
     ).bind(acronym).first();
     
@@ -95,7 +95,7 @@ secretarias.post('/', requireRole('admin'), async (c) => {
       return c.json({ error: 'Sigla já está em uso' }, 400);
     }
     
-    const result = await c.env.DB.prepare(`
+    const result = await db.query(`
       INSERT INTO secretarias (
         name, acronym, email, phone, responsible,
         active, created_at, updated_at
@@ -112,7 +112,7 @@ secretarias.post('/', requireRole('admin'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
@@ -149,7 +149,7 @@ secretarias.put('/:id', requireRole('admin'), async (c) => {
     const { name, acronym, email, phone, responsible, active } = await c.req.json();
     
     // Verificar se existe
-    const existing = await c.env.DB.prepare(
+    const existing = await db.query(
       'SELECT * FROM secretarias WHERE id = ?'
     ).bind(id).first();
     
@@ -159,7 +159,7 @@ secretarias.put('/:id', requireRole('admin'), async (c) => {
     
     // Verificar se sigla está disponível
     if (acronym && acronym !== existing.acronym) {
-      const acronymExists = await c.env.DB.prepare(
+      const acronymExists = await db.query(
         'SELECT id FROM secretarias WHERE acronym = ? AND id != ?'
       ).bind(acronym.toUpperCase(), id).first();
       
@@ -168,7 +168,7 @@ secretarias.put('/:id', requireRole('admin'), async (c) => {
       }
     }
     
-    await c.env.DB.prepare(`
+    await db.query(`
       UPDATE secretarias 
       SET name = ?,
           acronym = ?,
@@ -192,7 +192,7 @@ secretarias.put('/:id', requireRole('admin'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, new_values, ip_address, user_agent, created_at
@@ -226,7 +226,7 @@ secretarias.delete('/:id', requireRole('admin'), async (c) => {
     const id = parseInt(c.req.param('id'));
     
     // Verificar se existe
-    const secretaria = await c.env.DB.prepare(
+    const secretaria = await db.query(
       'SELECT * FROM secretarias WHERE id = ?'
     ).bind(id).first();
     
@@ -235,7 +235,7 @@ secretarias.delete('/:id', requireRole('admin'), async (c) => {
     }
     
     // Verificar se tem usuários ou matérias
-    const { results: usage } = await c.env.DB.prepare(`
+    const { results: usage } = await db.query(`
       SELECT 
         (SELECT COUNT(*) FROM users WHERE secretaria_id = ?) as total_users,
         (SELECT COUNT(*) FROM matters WHERE secretaria_id = ?) as total_matters
@@ -245,7 +245,7 @@ secretarias.delete('/:id', requireRole('admin'), async (c) => {
     
     if (hasUsage) {
       // Soft delete - apenas desativa
-      await c.env.DB.prepare(
+      await db.query(
         'UPDATE secretarias SET active = 0, updated_at = datetime(\'now\') WHERE id = ?'
       ).bind(id).run();
       
@@ -255,7 +255,7 @@ secretarias.delete('/:id', requireRole('admin'), async (c) => {
       });
     } else {
       // Hard delete - remove completamente
-      await c.env.DB.prepare('DELETE FROM secretarias WHERE id = ?').bind(id).run();
+      await db.query('DELETE FROM secretarias WHERE id = ?').bind(id).run();
       
       return c.json({ 
         message: 'Secretaria removida com sucesso',
@@ -267,7 +267,7 @@ secretarias.delete('/:id', requireRole('admin'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, ip_address, user_agent, created_at

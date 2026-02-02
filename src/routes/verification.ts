@@ -25,7 +25,7 @@ verification.post('/edition', async (c) => {
     }
     
     // Buscar edição pelo número e ano
-    const edition = await c.env.DB.prepare(`
+    const edition = await db.query(`
       SELECT * FROM editions 
       WHERE edition_number = ? AND year = ? AND status = 'published'
     `).bind(edition_number, parseInt(year)).first();
@@ -41,7 +41,7 @@ verification.post('/edition', async (c) => {
     const isValid = edition.pdf_hash === hash;
     
     // Buscar matérias da edição
-    const { results: matters } = await c.env.DB.prepare(`
+    const { results: matters } = await db.query(`
       SELECT 
         m.id, m.title, m.matter_type_id,
         mt.name as matter_type_name,
@@ -98,7 +98,7 @@ verification.post('/matter-signature', async (c) => {
     }
     
     // Buscar matéria
-    const matter = await c.env.DB.prepare(`
+    const matter = await db.query(`
       SELECT 
         m.*,
         mt.name as matter_type_name,
@@ -167,7 +167,7 @@ verification.get('/edition/:edition_number/:year', async (c) => {
     const edition_number = c.req.param('edition_number');
     const year = parseInt(c.req.param('year'));
     
-    const edition = await c.env.DB.prepare(`
+    const edition = await db.query(`
       SELECT 
         e.*,
         publisher.name as published_by_name
@@ -181,7 +181,7 @@ verification.get('/edition/:edition_number/:year', async (c) => {
     }
     
     // Buscar matérias
-    const { results: matters } = await c.env.DB.prepare(`
+    const { results: matters } = await db.query(`
       SELECT 
         m.id, m.title, m.signature_hash, m.signed_at,
         mt.name as matter_type_name,

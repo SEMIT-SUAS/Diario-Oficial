@@ -94,8 +94,8 @@ exportRoutes.get('/matters/csv', authMiddleware, async (c) => {
     query += ` ORDER BY m.created_at DESC`;
     
     const { results } = user.role === 'secretaria'
-      ? await c.env.DB.prepare(query).bind(user.secretaria_id).all()
-      : await c.env.DB.prepare(query).all();
+      ? await db.query(query).bind(user.secretaria_id).all()
+      : await db.query(query).all();
     
     const csv = convertToCSV(results as any[], [
       'id', 'title', 'summary', 'tipo', 'secretaria', 'status', 
@@ -149,8 +149,8 @@ exportRoutes.get('/matters/xls', authMiddleware, async (c) => {
     query += ` ORDER BY m.created_at DESC`;
     
     const { results } = user.role === 'secretaria'
-      ? await c.env.DB.prepare(query).bind(user.secretaria_id).all()
-      : await c.env.DB.prepare(query).all();
+      ? await db.query(query).bind(user.secretaria_id).all()
+      : await db.query(query).all();
     
     const html = convertToHTMLTable(results as any[], [
       'id', 'title', 'summary', 'tipo', 'secretaria', 'status', 
@@ -176,7 +176,7 @@ exportRoutes.get('/matters/xls', authMiddleware, async (c) => {
  */
 exportRoutes.get('/editions/csv', authMiddleware, async (c) => {
   try {
-    const { results } = await c.env.DB.prepare(`
+    const { results } = await db.query(`
       SELECT 
         e.id,
         e.edition_number as numero,
@@ -219,7 +219,7 @@ exportRoutes.get('/editions/csv', authMiddleware, async (c) => {
  */
 exportRoutes.get('/editions/xls', authMiddleware, async (c) => {
   try {
-    const { results } = await c.env.DB.prepare(`
+    const { results } = await db.query(`
       SELECT 
         e.id,
         e.edition_number as numero,

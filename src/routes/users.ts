@@ -19,7 +19,7 @@ users.use('/*', requireRole('admin'));
  */
 users.get('/', async (c) => {
   try {
-    const { results } = await c.env.DB.prepare(`
+    const { results } = await db.query(`
       SELECT 
         u.id, u.name, u.email, u.cpf, u.role, u.secretaria_id,
         u.active, u.created_at, u.last_login,
@@ -45,7 +45,7 @@ users.get('/:id', async (c) => {
   try {
     const id = parseInt(c.req.param('id'));
     
-    const user = await c.env.DB.prepare(`
+    const user = await db.query(`
       SELECT 
         u.id, u.name, u.email, u.cpf, u.role, u.secretaria_id,
         u.active, u.created_at, u.last_login,
@@ -84,7 +84,7 @@ users.post('/', async (c) => {
     }
     
     // Verificar se email já existe
-    const existing = await c.env.DB.prepare(
+    const existing = await db.query(
       'SELECT id FROM users WHERE email = ?'
     ).bind(email).first();
     
@@ -96,7 +96,7 @@ users.post('/', async (c) => {
     const passwordHash = await hashPassword(password);
     
     // Criar usuário
-    const result = await c.env.DB.prepare(`
+    const result = await db.query(`
       INSERT INTO users (
         name, email, cpf, password_hash, role, secretaria_id, 
         active, created_at, updated_at
@@ -109,7 +109,7 @@ users.post('/', async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
@@ -150,7 +150,7 @@ users.put('/:id', async (c) => {
     console.log('PUT /api/users/:id - Dados recebidos:', JSON.stringify(bodyData));
     
     // Verificar se usuário existe e pegar valores atuais
-    const user = await c.env.DB.prepare(
+    const user = await db.query(
       'SELECT * FROM users WHERE id = ?'
     ).bind(id).first();
     
@@ -190,7 +190,7 @@ users.put('/:id', async (c) => {
     });
     
     // Atualizar usuário
-    await c.env.DB.prepare(`
+    await db.query(`
       UPDATE users 
       SET name = ?, email = ?, cpf = ?, role = ?, 
           secretaria_id = ?, active = ?, updated_at = datetime('now')
@@ -201,7 +201,7 @@ users.put('/:id', async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, new_values, ip_address, user_agent, created_at
@@ -240,7 +240,7 @@ users.put('/:id/reset-password', async (c) => {
     }
     
     // Verificar se usuário existe
-    const user = await c.env.DB.prepare(
+    const user = await db.query(
       'SELECT id, name, email FROM users WHERE id = ?'
     ).bind(id).first();
     
@@ -252,7 +252,7 @@ users.put('/:id/reset-password', async (c) => {
     const passwordHash = await hashPassword(new_password);
     
     // Atualizar senha
-    await c.env.DB.prepare(
+    await db.query(
       'UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?'
     ).bind(passwordHash, id).run();
     
@@ -260,7 +260,7 @@ users.put('/:id/reset-password', async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
@@ -298,7 +298,7 @@ users.delete('/:id', async (c) => {
     }
     
     // Verificar se usuário existe
-    const user = await c.env.DB.prepare(
+    const user = await db.query(
       'SELECT * FROM users WHERE id = ?'
     ).bind(id).first();
     
@@ -308,7 +308,7 @@ users.delete('/:id', async (c) => {
     
     // EXCLUIR usuário permanentemente (hard delete)
     // AVISO: Isso remove o usuário completamente do banco de dados
-    await c.env.DB.prepare(
+    await db.query(
       'DELETE FROM users WHERE id = ?'
     ).bind(id).run();
     
@@ -316,7 +316,7 @@ users.delete('/:id', async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, ip_address, user_agent, created_at

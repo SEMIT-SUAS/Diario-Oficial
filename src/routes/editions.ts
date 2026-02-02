@@ -17,7 +17,7 @@ editions.get('/:id/pdf', async (c) => {
     const id = parseInt(c.req.param('id'));
     
     // Buscar edição publicada com informação da edição pai (se suplementar)
-    const edition = await c.env.DB.prepare(`
+    const edition = await db.query(`
       SELECT e.*, 
              parent.edition_number as parent_edition_number
       FROM editions e
@@ -30,7 +30,7 @@ editions.get('/:id/pdf', async (c) => {
     }
     
     // Buscar informações do publicador
-    const publisher = await c.env.DB.prepare(`
+    const publisher = await db.query(`
       SELECT u.name, s.acronym as secretaria_acronym
       FROM users u
       LEFT JOIN secretarias s ON u.secretaria_id = s.id
@@ -38,7 +38,7 @@ editions.get('/:id/pdf', async (c) => {
     `).bind(edition.published_by).first();
     
     // Buscar matérias da edição para gerar HTML
-    const { results: matters } = await c.env.DB.prepare(`
+    const { results: matters } = await db.query(`
       SELECT 
         m.*,
         s.name as secretaria_name,
@@ -58,7 +58,7 @@ editions.get('/:id/pdf', async (c) => {
     // Buscar anexos de cada matéria
     const mattersWithAttachments = await Promise.all(
       (matters as any[]).map(async (matter) => {
-        const { results: attachments } = await c.env.DB.prepare(`
+        const { results: attachments } = await db.query(`
           SELECT id, filename, file_url, file_size, file_type, original_name
           FROM attachments
           WHERE matter_id = ?
@@ -77,7 +77,7 @@ editions.get('/:id/pdf', async (c) => {
       edition: edition as any,
       matters: mattersWithAttachments as any[],
       publisher: publisher as any
-    }, c.env.DB);
+    }, db.query);
     
     // Retornar HTML diretamente para download
     const filename = `diario-oficial-${edition.edition_number.replace(/\//g, '-')}-${edition.year}.html`;
@@ -109,7 +109,7 @@ editions.get('/:id/preview', async (c) => {
     const id = parseInt(c.req.param('id'));
     
     // Buscar edição (permite draft para preview)
-    const edition = await c.env.DB.prepare(`
+    const edition = await db.query(`
       SELECT e.*, 
              parent.edition_number as parent_edition_number
       FROM editions e
@@ -124,7 +124,7 @@ editions.get('/:id/preview', async (c) => {
     // Buscar informações do publicador (se existir)
     let publisher = null;
     if (edition.published_by) {
-      publisher = await c.env.DB.prepare(`
+      publisher = await db.query(`
         SELECT u.name, s.acronym as secretaria_acronym
         FROM users u
         LEFT JOIN secretarias s ON u.secretaria_id = s.id
@@ -133,7 +133,7 @@ editions.get('/:id/preview', async (c) => {
     }
     
     // Buscar matérias da edição
-    const { results: matters } = await c.env.DB.prepare(`
+    const { results: matters } = await db.query(`
       SELECT 
         m.*,
         s.name as secretaria_name,
@@ -153,7 +153,7 @@ editions.get('/:id/preview', async (c) => {
     // Buscar anexos
     const mattersWithAttachments = await Promise.all(
       (matters as any[]).map(async (matter) => {
-        const { results: attachments } = await c.env.DB.prepare(`
+        const { results: attachments } = await db.query(`
           SELECT id, filename, file_url, file_size, file_type, original_name
           FROM attachments
           WHERE matter_id = ?
@@ -172,7 +172,7 @@ editions.get('/:id/preview', async (c) => {
       edition: edition as any,
       matters: mattersWithAttachments as any[],
       publisher: publisher as any
-    }, c.env.DB);
+    }, db.query);
     
     // Adicionar cabeçalho de preview ao HTML
     const previewHTML = `
@@ -339,7 +339,7 @@ editions.get('/', async (c) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
     params.push(parseInt(limit), offset);
     
-    const stmt = c.env.DB.prepare(query).bind(...params);
+    const stmt = db.query(query).bind(...params);
     const { results } = await stmt.all();
     
     // Contar total para paginação
@@ -355,7 +355,7 @@ editions.get('/', async (c) => {
       countParams.push(parseInt(year));
     }
     
-    const countResult = await c.env.DB.prepare(countQuery).bind(...countParams).first();
+    const countResult = await db.query(countQuery).bind(...countParams).first();
     const total = countResult?.total || 0;
     
     return c.json({
@@ -383,7 +383,7 @@ editions.get('/:id', async (c) => {
     const id = parseInt(c.req.param('id'));
     
     // Buscar edição
-    const edition = await c.env.DB.prepare(`
+    const edition = await db.query(`
       SELECT 
         e.*,
         u.name as published_by_name
@@ -397,7 +397,7 @@ editions.get('/:id', async (c) => {
     }
     
     // Buscar matérias da edição
-    const { results: matters } = await c.env.DB.prepare(`
+    const { results: matters } = await db.query(`
       SELECT 
         m.*,
         em.display_order,
@@ -451,7 +451,7 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
     if (!edition_number) {
       if (is_supplemental) {
         // Para edição suplementar: buscar último suplemento do ano
-        const lastSupplement = await c.env.DB.prepare(`
+        const lastSupplement = await db.query(`
           SELECT edition_number, supplemental_number FROM editions 
           WHERE year = ? AND is_supplemental = 1
           ORDER BY CAST(COALESCE(supplemental_number, '0') AS INTEGER) DESC 
@@ -469,7 +469,7 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
         
       } else {
         // Para edição normal: buscar última edição normal do ano
-        const lastEdition = await c.env.DB.prepare(`
+        const lastEdition = await db.query(`
           SELECT edition_number FROM editions 
           WHERE year = ? AND (is_supplemental = 0 OR is_supplemental IS NULL)
           ORDER BY CAST(substr(edition_number, 1, instr(edition_number, '/') - 1) AS INTEGER) DESC 
@@ -501,7 +501,7 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Verificar se já existe edição com esse número
-    const existing = await c.env.DB.prepare(
+    const existing = await db.query(
       'SELECT id FROM editions WHERE edition_number = ?'
     ).bind(edition_number).first();
     
@@ -512,7 +512,7 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
     // Se for suplementar, buscar edição normal do mesmo dia para referenciar
     let parent_edition_id = null;
     if (is_supplemental) {
-      const parentEdition = await c.env.DB.prepare(`
+      const parentEdition = await db.query(`
         SELECT id, edition_number FROM editions 
         WHERE edition_date = ? 
         AND (is_supplemental = 0 OR is_supplemental IS NULL)
@@ -526,7 +526,7 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Criar edição
-    const result = await c.env.DB.prepare(`
+    const result = await db.query(`
       INSERT INTO editions (
         edition_number, edition_date, year, status,
         is_supplemental, supplemental_number, parent_edition_id,
@@ -547,7 +547,7 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
@@ -591,7 +591,7 @@ editions.put('/:id', requireRole('admin', 'semad'), async (c) => {
     const { edition_number, edition_date, year } = await c.req.json();
     
     // Verificar se edição existe
-    const edition = await c.env.DB.prepare(
+    const edition = await db.query(
       'SELECT * FROM editions WHERE id = ?'
     ).bind(id).first();
     
@@ -607,7 +607,7 @@ editions.put('/:id', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Atualizar edição
-    await c.env.DB.prepare(`
+    await db.query(`
       UPDATE editions 
       SET edition_number = ?, edition_date = ?, year = ?,
           updated_at = datetime('now')
@@ -618,7 +618,7 @@ editions.put('/:id', requireRole('admin', 'semad'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, new_values, ip_address, user_agent, created_at
@@ -653,7 +653,7 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
     const { matter_id } = await c.req.json();
     
     // Verificar se edição existe e não está publicada
-    const edition = await c.env.DB.prepare(
+    const edition = await db.query(
       'SELECT * FROM editions WHERE id = ?'
     ).bind(editionId).first();
     
@@ -668,7 +668,7 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Verificar se matéria existe e está aprovada
-    const matter = await c.env.DB.prepare(
+    const matter = await db.query(
       'SELECT * FROM matters WHERE id = ?'
     ).bind(matter_id).first();
     
@@ -683,7 +683,7 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Verificar se matéria já está na edição
-    const existing = await c.env.DB.prepare(
+    const existing = await db.query(
       'SELECT id FROM edition_matters WHERE edition_id = ? AND matter_id = ?'
     ).bind(editionId, matter_id).first();
     
@@ -692,21 +692,21 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Buscar próxima ordem de exibição
-    const lastOrder = await c.env.DB.prepare(
+    const lastOrder = await db.query(
       'SELECT MAX(display_order) as max_order FROM edition_matters WHERE edition_id = ?'
     ).bind(editionId).first();
     
     const nextOrder = (lastOrder?.max_order || 0) + 1;
     
     // Adicionar matéria à edição
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO edition_matters (
         edition_id, matter_id, display_order, added_by, added_at
       ) VALUES (?, ?, ?, ?, datetime('now'))
     `).bind(editionId, matter_id, nextOrder, user.id).run();
     
     // Atualizar campo edition_id na matéria
-    await c.env.DB.prepare(
+    await db.query(
       'UPDATE matters SET edition_id = ?, updated_at = datetime(\'now\') WHERE id = ?'
     ).bind(editionId, matter_id).run();
     
@@ -714,7 +714,7 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
@@ -755,7 +755,7 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Verificar se edição existe e não está publicada
-    const edition = await c.env.DB.prepare(
+    const edition = await db.query(
       'SELECT * FROM editions WHERE id = ?'
     ).bind(editionId).first();
     
@@ -770,7 +770,7 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Buscar próxima ordem de exibição
-    const lastOrder = await c.env.DB.prepare(
+    const lastOrder = await db.query(
       'SELECT MAX(display_order) as max_order FROM edition_matters WHERE edition_id = ?'
     ).bind(editionId).first();
     
@@ -785,7 +785,7 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
     for (const matterId of matter_ids) {
       try {
         // Verificar se matéria existe e está aprovada
-        const matter = await c.env.DB.prepare(
+        const matter = await db.query(
           'SELECT * FROM matters WHERE id = ?'
         ).bind(matterId).first();
         
@@ -800,7 +800,7 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
         }
         
         // Verificar se matéria já está na edição
-        const existing = await c.env.DB.prepare(
+        const existing = await db.query(
           'SELECT id FROM edition_matters WHERE edition_id = ? AND matter_id = ?'
         ).bind(editionId, matterId).first();
         
@@ -810,14 +810,14 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
         }
         
         // Adicionar matéria à edição
-        await c.env.DB.prepare(`
+        await db.query(`
           INSERT INTO edition_matters (
             edition_id, matter_id, display_order, added_by, added_at
           ) VALUES (?, ?, ?, ?, datetime('now'))
         `).bind(editionId, matterId, currentOrder, user.id).run();
         
         // Atualizar campo edition_id na matéria
-        await c.env.DB.prepare(
+        await db.query(
           'UPDATE matters SET edition_id = ?, updated_at = datetime(\'now\') WHERE id = ?'
         ).bind(editionId, matterId).run();
         
@@ -837,7 +837,7 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
@@ -874,7 +874,7 @@ editions.delete('/:id/remove-matter/:matterId', requireRole('admin', 'semad'), a
     const matterId = parseInt(c.req.param('matterId'));
     
     // Verificar se edição existe e não está publicada
-    const edition = await c.env.DB.prepare(
+    const edition = await db.query(
       'SELECT * FROM editions WHERE id = ?'
     ).bind(editionId).first();
     
@@ -889,12 +889,12 @@ editions.delete('/:id/remove-matter/:matterId', requireRole('admin', 'semad'), a
     }
     
     // Remover matéria da edição
-    await c.env.DB.prepare(
+    await db.query(
       'DELETE FROM edition_matters WHERE edition_id = ? AND matter_id = ?'
     ).bind(editionId, matterId).run();
     
     // Remover edition_id da matéria
-    await c.env.DB.prepare(
+    await db.query(
       'UPDATE matters SET edition_id = NULL, updated_at = datetime(\'now\') WHERE id = ?'
     ).bind(matterId).run();
     
@@ -902,7 +902,7 @@ editions.delete('/:id/remove-matter/:matterId', requireRole('admin', 'semad'), a
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, ip_address, user_agent, created_at
@@ -936,7 +936,7 @@ editions.put('/:id/reorder', requireRole('admin', 'semad'), async (c) => {
     const { matter_orders } = await c.req.json(); // Array: [{ matter_id, display_order }]
     
     // Verificar se edição existe e não está publicada
-    const edition = await c.env.DB.prepare(
+    const edition = await db.query(
       'SELECT * FROM editions WHERE id = ?'
     ).bind(editionId).first();
     
@@ -952,7 +952,7 @@ editions.put('/:id/reorder', requireRole('admin', 'semad'), async (c) => {
     
     // Atualizar ordem de cada matéria
     for (const order of matter_orders) {
-      await c.env.DB.prepare(`
+      await db.query(`
         UPDATE edition_matters 
         SET display_order = ?
         WHERE edition_id = ? AND matter_id = ?
@@ -963,7 +963,7 @@ editions.put('/:id/reorder', requireRole('admin', 'semad'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
@@ -996,7 +996,7 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
     const id = parseInt(c.req.param('id'));
     
     // Verificar se edição existe
-    const edition = await c.env.DB.prepare(
+    const edition = await db.query(
       'SELECT * FROM editions WHERE id = ?'
     ).bind(id).first();
     
@@ -1009,7 +1009,7 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Verificar se há matérias na edição
-    const matterCount = await c.env.DB.prepare(
+    const matterCount = await db.query(
       'SELECT COUNT(*) as count FROM edition_matters WHERE edition_id = ?'
     ).bind(id).first();
     
@@ -1020,7 +1020,7 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Buscar informações do publicador (usuário logado que está publicando)
-    const publisher = await c.env.DB.prepare(`
+    const publisher = await db.query(`
       SELECT u.name, s.acronym as secretaria_acronym
       FROM users u
       LEFT JOIN secretarias s ON u.secretaria_id = s.id
@@ -1028,7 +1028,7 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
     `).bind(user.id).first();
     
     // Buscar todas as matérias da edição ordenadas com anexos
-    const { results: matters } = await c.env.DB.prepare(`
+    const { results: matters } = await db.query(`
       SELECT 
         m.*,
         s.name as secretaria_name,
@@ -1048,7 +1048,7 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
     // Buscar anexos de cada matéria
     const mattersWithAttachments = await Promise.all(
       (matters as any[]).map(async (matter) => {
-        const { results: attachments } = await c.env.DB.prepare(`
+        const { results: attachments } = await db.query(`
           SELECT id, filename, file_url, file_size, file_type, original_name
           FROM attachments
           WHERE matter_id = ?
@@ -1066,10 +1066,10 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
       edition: edition as any,
       matters: mattersWithAttachments as any[],
       publisher: publisher as any
-    }, c.env.DB);
+    }, db.query);
     
     // Atualizar edição com informações do PDF
-    await c.env.DB.prepare(`
+    await db.query(`
       UPDATE editions 
       SET status = 'published',
           pdf_url = ?,
@@ -1089,7 +1089,7 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
     
     // Atualizar status de todas as matérias para 'published'
     for (const matter of matters) {
-      await c.env.DB.prepare(`
+      await db.query(`
         UPDATE matters 
         SET status = 'published',
             published_at = datetime('now'),
@@ -1103,7 +1103,7 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
@@ -1148,7 +1148,7 @@ editions.delete('/:id', requireRole('admin'), async (c) => {
     const id = parseInt(c.req.param('id'));
     
     // Verificar se edição existe
-    const edition = await c.env.DB.prepare(
+    const edition = await db.query(
       'SELECT * FROM editions WHERE id = ?'
     ).bind(id).first();
     
@@ -1164,12 +1164,12 @@ editions.delete('/:id', requireRole('admin'), async (c) => {
     }
     
     // Remover relacionamentos com matérias
-    await c.env.DB.prepare(
+    await db.query(
       'DELETE FROM edition_matters WHERE edition_id = ?'
     ).bind(id).run();
     
     // Deletar edição
-    await c.env.DB.prepare(
+    await db.query(
       'DELETE FROM editions WHERE id = ?'
     ).bind(id).run();
     
@@ -1177,7 +1177,7 @@ editions.delete('/:id', requireRole('admin'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, ip_address, user_agent, created_at
@@ -1214,7 +1214,7 @@ editions.post('/:id/auto-build', requireRole('admin', 'semad'), async (c) => {
     const user = c.get('user');
     
     // Verificar se edição existe e está em draft
-    const edition = await c.env.DB.prepare(
+    const edition = await db.query(
       'SELECT * FROM editions WHERE id = ? AND status = ?'
     ).bind(id, 'draft').first();
     
@@ -1223,7 +1223,7 @@ editions.post('/:id/auto-build', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Buscar todas as matérias aprovadas e ainda não publicadas
-    const { results: matters } = await c.env.DB.prepare(`
+    const { results: matters } = await db.query(`
       SELECT 
         m.*,
         s.name as secretaria_name,
@@ -1247,14 +1247,14 @@ editions.post('/:id/auto-build', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Remover matérias existentes da edição (se houver)
-    await c.env.DB.prepare(
+    await db.query(
       'DELETE FROM edition_matters WHERE edition_id = ?'
     ).bind(id).run();
     
     // Adicionar todas as matérias com display_order sequencial
     let displayOrder = 1;
     for (const matter of matters) {
-      await c.env.DB.prepare(`
+      await db.query(`
         INSERT INTO edition_matters (edition_id, matter_id, display_order, added_at, added_by)
         VALUES (?, ?, ?, datetime('now'), ?)
       `).bind(id, matter.id, displayOrder, user.id).run();
@@ -1263,7 +1263,7 @@ editions.post('/:id/auto-build', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Atualizar updated_at da edição
-    await c.env.DB.prepare(
+    await db.query(
       'UPDATE editions SET updated_at = datetime(\'now\') WHERE id = ?'
     ).bind(id).run();
     
@@ -1271,7 +1271,7 @@ editions.post('/:id/auto-build', requireRole('admin', 'semad'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at

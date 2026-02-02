@@ -1218,4 +1218,27 @@ app.onError((err, c) => {
   return c.json({ error: 'Erro interno do servidor', details: err.message }, 500);
 });
 
+
+app.get('/api/debug/routes', (c) => {
+  return c.json({
+    routes: [
+      { method: 'GET', path: '/api/matters' },
+      { method: 'GET', path: '/api/matters/:id' },
+      { method: 'POST', path: '/api/matters' },
+      { method: 'POST', path: '/api/auth/login' },
+      { method: 'GET', path: '/api/auth/me' },
+      { method: 'GET', path: '/api/matter-types' },
+      { method: 'GET', path: '/api/health' },
+      { method: 'GET', path: '/api/debug/routes' }
+    ],
+    timestamp: new Date().toISOString()
+  });
+});
+
+console.log('=== IMPORTANDO ROTAS ===');
+console.log('Importando auth:', typeof auth);
+console.log('Importando matters:', typeof matters);
+console.log('Importando semad:', typeof semad);
+console.log('=== FIM DOS IMPORTS ===');
+
 export default app;

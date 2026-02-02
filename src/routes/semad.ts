@@ -19,7 +19,7 @@ semad.use('/*', requireRole('semad', 'admin'));
  */
 semad.get('/pending', async (c) => {
   try {
-    const result = await c.env.DB
+    const result = await db.query
       .prepare(`
         SELECT 
           m.*,
@@ -53,7 +53,7 @@ semad.post('/:id/review', async (c) => {
     const user = c.get('user');
     const id = c.req.param('id');
     
-    const matter = await c.env.DB
+    const matter = await db.query
       .prepare('SELECT * FROM matters WHERE id = ?')
       .bind(id)
       .first<Matter>();
@@ -66,7 +66,7 @@ semad.post('/:id/review', async (c) => {
       return c.json({ error: 'Matéria não está aguardando análise' }, 400);
     }
     
-    await c.env.DB
+    await db.query
       .prepare(`
         UPDATE matters 
         SET status = 'under_review', reviewer_id = ?, reviewed_at = datetime('now'), updated_at = datetime('now')
@@ -93,7 +93,7 @@ semad.post('/:id/approve', async (c) => {
     const id = c.req.param('id');
     const { review_notes, scheduled_date, signature_password } = await c.req.json();
     
-    const matter = await c.env.DB
+    const matter = await db.query
       .prepare('SELECT * FROM matters WHERE id = ?')
       .bind(id)
       .first<Matter>();
@@ -118,7 +118,7 @@ semad.post('/:id/approve', async (c) => {
     // Determinar novo status
     const newStatus = scheduled_date ? 'scheduled' : 'approved';
     
-    await c.env.DB
+    await db.query
       .prepare(`
         UPDATE matters 
         SET 
@@ -147,7 +147,7 @@ semad.post('/:id/approve', async (c) => {
       .run();
     
     // Criar notificação para o autor
-    await c.env.DB
+    await db.query
       .prepare(`
         INSERT INTO notifications (user_id, matter_id, type, title, message, created_at)
         VALUES (?, ?, 'matter_approved', ?, ?, datetime('now'))
@@ -186,7 +186,7 @@ semad.post('/:id/reject', async (c) => {
       return c.json({ error: 'Motivo da rejeição é obrigatório' }, 400);
     }
     
-    const matter = await c.env.DB
+    const matter = await db.query
       .prepare('SELECT * FROM matters WHERE id = ?')
       .bind(id)
       .first<Matter>();
@@ -199,7 +199,7 @@ semad.post('/:id/reject', async (c) => {
       return c.json({ error: 'Matéria não pode ser rejeitada neste status' }, 400);
     }
     
-    await c.env.DB
+    await db.query
       .prepare(`
         UPDATE matters 
         SET 
@@ -214,7 +214,7 @@ semad.post('/:id/reject', async (c) => {
       .run();
     
     // Criar notificação para o autor
-    await c.env.DB
+    await db.query
       .prepare(`
         INSERT INTO notifications (user_id, matter_id, type, title, message, created_at)
         VALUES (?, ?, 'matter_rejected', ?, ?, datetime('now'))
@@ -249,7 +249,7 @@ semad.post('/:id/comment', async (c) => {
       return c.json({ error: 'Comentário é obrigatório' }, 400);
     }
     
-    await c.env.DB
+    await db.query
       .prepare(`
         INSERT INTO comments (matter_id, user_id, comment, is_internal, created_at)
         VALUES (?, ?, ?, ?, datetime('now'))
@@ -272,7 +272,7 @@ semad.post('/:id/comment', async (c) => {
 semad.get('/dashboard', async (c) => {
   try {
     // Total de matérias por status
-    const statusStats = await c.env.DB
+    const statusStats = await db.query
       .prepare(`
         SELECT status, COUNT(*) as count
         FROM matters
@@ -281,7 +281,7 @@ semad.get('/dashboard', async (c) => {
       .all();
     
     // Matérias pendentes de análise
-    const pendingCount = await c.env.DB
+    const pendingCount = await db.query
       .prepare(`
         SELECT COUNT(*) as count
         FROM matters
@@ -290,7 +290,7 @@ semad.get('/dashboard', async (c) => {
       .first<{ count: number }>();
     
     // Matérias aprovadas hoje
-    const approvedToday = await c.env.DB
+    const approvedToday = await db.query
       .prepare(`
         SELECT COUNT(*) as count
         FROM matters
@@ -299,7 +299,7 @@ semad.get('/dashboard', async (c) => {
       .first<{ count: number }>();
     
     // Matérias por secretaria
-    const bySecretaria = await c.env.DB
+    const bySecretaria = await db.query
       .prepare(`
         SELECT 
           s.name as secretaria_name,

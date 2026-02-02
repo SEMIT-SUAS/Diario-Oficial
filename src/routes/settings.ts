@@ -16,7 +16,7 @@ const settings = new Hono<HonoContext>();
  */
 settings.get('/logo', async (c) => {
   try {
-    const logo = await c.env.DB.prepare(
+    const logo = await db.query(
       "SELECT value FROM system_settings WHERE key = 'logo_url'"
     ).first();
     
@@ -45,7 +45,7 @@ settings.use('/*', authMiddleware);
  */
 settings.get('/', requireRole('admin'), async (c) => {
   try {
-    const { results } = await c.env.DB.prepare(`
+    const { results } = await db.query(`
       SELECT * FROM system_settings ORDER BY key
     `).all();
     
@@ -65,7 +65,7 @@ settings.get('/:key', requireRole('admin'), async (c) => {
   try {
     const key = c.req.param('key');
     
-    const setting = await c.env.DB.prepare(
+    const setting = await db.query(
       'SELECT * FROM system_settings WHERE key = ?'
     ).bind(key).first();
     
@@ -92,7 +92,7 @@ settings.put('/:key', requireRole('admin'), async (c) => {
     const { value, description } = await c.req.json();
     
     // Verificar se existe
-    const existing = await c.env.DB.prepare(
+    const existing = await db.query(
       'SELECT * FROM system_settings WHERE key = ?'
     ).bind(key).first();
     
@@ -109,7 +109,7 @@ settings.put('/:key', requireRole('admin'), async (c) => {
       return c.json({ error: 'Valor deve ser numérico' }, 400);
     }
     
-    await c.env.DB.prepare(`
+    await db.query(`
       UPDATE system_settings 
       SET value = ?,
           description = ?,
@@ -127,7 +127,7 @@ settings.put('/:key', requireRole('admin'), async (c) => {
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, new_values, ip_address, user_agent, created_at
@@ -165,7 +165,7 @@ settings.post('/', requireRole('admin'), async (c) => {
     }
     
     // Verificar se já existe
-    const existing = await c.env.DB.prepare(
+    const existing = await db.query(
       'SELECT id FROM system_settings WHERE key = ?'
     ).bind(key).first();
     
@@ -173,7 +173,7 @@ settings.post('/', requireRole('admin'), async (c) => {
       return c.json({ error: 'Configuração já existe' }, 400);
     }
     
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO system_settings (
         key, value, description, updated_at, updated_by
       ) VALUES (?, ?, ?, datetime('now'), ?)
@@ -218,7 +218,7 @@ settings.post('/logo/upload', requireRole('admin'), async (c) => {
     const dataUrl = `data:${logoFile.type};base64,${base64}`;
     
     // Salvar nas configurações
-    await c.env.DB.prepare(`
+    await db.query(`
       INSERT INTO system_settings (key, value, description, updated_at, updated_by)
       VALUES ('logo_url', ?, 'Logo da Prefeitura (Base64)', datetime('now'), ?)
       ON CONFLICT(key) DO UPDATE SET
@@ -265,13 +265,13 @@ settings.post('/bulk', requireRole('admin'), async (c) => {
       
       try {
         // Verificar se existe
-        const existing = await c.env.DB.prepare(
+        const existing = await db.query(
           'SELECT * FROM system_settings WHERE key = ?'
         ).bind(key).first();
         
         if (existing) {
           // Atualizar existente
-          await c.env.DB.prepare(`
+          await db.query(`
             UPDATE system_settings 
             SET value = ?,
                 updated_at = datetime('now'),
@@ -285,7 +285,7 @@ settings.post('/bulk', requireRole('admin'), async (c) => {
           updated++;
         } else {
           // Criar novo se não existe
-          await c.env.DB.prepare(`
+          await db.query(`
             INSERT INTO system_settings (key, value, updated_at, updated_by)
             VALUES (?, ?, datetime('now'), ?)
           `).bind(

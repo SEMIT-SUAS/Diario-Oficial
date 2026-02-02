@@ -13,7 +13,7 @@ const matterTypes = new Hono<HonoContext>();
  */
 matterTypes.get('/', async (c) => {
   try {
-    const result = await c.env.DB
+    const result = await db.query
       .prepare('SELECT * FROM matter_types WHERE active = 1 ORDER BY order_position ASC')
       .all<MatterType>();
     
@@ -37,7 +37,7 @@ matterTypes.post('/', async (c) => {
       return c.json({ error: 'Nome é obrigatório' }, 400);
     }
     
-    const result = await c.env.DB
+    const result = await db.query
       .prepare(`
         INSERT INTO matter_types (name, description, icon, color, order_position, created_at)
         VALUES (?, ?, ?, ?, ?, datetime('now'))
@@ -65,7 +65,7 @@ matterTypes.put('/:id', async (c) => {
     const id = c.req.param('id');
     const { name, description, icon, color, order_position, active } = await c.req.json();
     
-    await c.env.DB
+    await db.query
       .prepare(`
         UPDATE matter_types 
         SET name = ?, description = ?, icon = ?, color = ?, order_position = ?, active = ?

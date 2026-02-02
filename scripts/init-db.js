@@ -122,11 +122,23 @@ async function main() {
   log('  🚀 DOM - Inicialização do Banco de Dados PostgreSQL', 'blue');
   log('='.repeat(60), 'blue');
   
-  log('\n📝 Configurações:', 'yellow');
-  log(`   Host: ${DB_CONFIG.host}`);
-  log(`   Port: ${DB_CONFIG.port}`);
-  log(`   User: ${DB_CONFIG.user}`);
-  log(`   Database: ${DB_NAME}`);
+  const readline = require('readline').createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  
+  const answer = await new Promise((resolve) => {
+    readline.question('\n⚠️  ATENÇÃO: Isso vai RECRIAR todo o banco de dados!\n   Deseja continuar? (s/N): ', resolve);
+  });
+  
+  readline.close();
+  
+  if (answer.toLowerCase() !== 's' && answer.toLowerCase() !== 'sim') {
+    log('\n❌ Operação cancelada pelo usuário.', 'yellow');
+    log('📋 Para iniciar o servidor sem recriar o banco:', 'yellow');
+    log('   npm run server');
+    process.exit(0);
+  }
   
   try {
     // 1. Criar banco de dados
