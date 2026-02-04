@@ -39,13 +39,13 @@ export async function authMiddleware(c: Context<HonoContext>, next: Next) {
     console.log('✅ Token válido. Payload:', decoded);
     
     // Buscar usuário no banco - Sintaxe PostgreSQL
+    // CORREÇÃO: Removi a coluna 'cpf' que não existe
     const result = await db.query(
       `SELECT 
         id, 
         name, 
         email, 
         password_hash, 
-        cpf, 
         role, 
         secretaria_id, 
         active, 
@@ -195,7 +195,6 @@ export async function optionalAuthMiddleware(c: Context<HonoContext>, next: Next
             name, 
             email, 
             password_hash, 
-            cpf, 
             role, 
             secretaria_id, 
             active, 
@@ -223,12 +222,14 @@ export async function optionalAuthMiddleware(c: Context<HonoContext>, next: Next
  * Middleware para desenvolvimento (simula usuário admin)
  */
 export function devAuthMiddleware(c: Context<HonoContext>, next: Next) {
+  console.log('🔓 Middleware de desenvolvimento - Acesso liberado');
+  
   // Crie um usuário mock para desenvolvimento
   const mockUser: User = {
     id: 1,
     email: 'admin@municipio.gov.br',
     name: 'Administrador',
-    password_hash: 'hashed_password',
+    password_hash: '',
     role: 'admin',
     secretaria_id: 1,
     active: 1,

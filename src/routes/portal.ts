@@ -4,53 +4,51 @@
 
 import { Hono } from 'hono';
 import { HonoContext } from '../types';
+import db from '../lib/db'; // Importe a conexão PostgreSQL
 
 const portal = new Hono<HonoContext>();
 
 // GET /api/portal/stats - Estatísticas gerais do portal
 portal.get('/stats', async (c) => {
   try {
-    const { DB } = c.env;
-    
     // Total de edições publicadas
-    const totalEditionsResult = await DB.prepare(`
+    const totalEditionsResult = await db.query(`
       SELECT COUNT(*) as count FROM editions 
       WHERE status = 'published'
-    `).first();
+    `);
     
     // Total de matérias publicadas
-    const totalMattersResult = await DB.prepare(`
+    const totalMattersResult = await db.query(`
       SELECT COUNT(*) as count FROM matters 
       WHERE status = 'published'
-    `).first();
+    `);
     
-    // Publicações deste mês
-    const thisMonthResult = await DB.prepare(`
+    // Publicações deste mês (PostgreSQL usa EXTRACT e DATE_TRUNC)
+    const thisMonthResult = await db.query(`
       SELECT COUNT(*) as count FROM editions 
       WHERE status = 'published' 
-      AND strftime('%Y-%m', edition_date) = strftime('%Y-%m', 'now')
-    `).first();
+      AND DATE_TRUNC('month', edition_date) = DATE_TRUNC('month', CURRENT_DATE)
+    `);
     
     return c.json({
-      total_editions: totalEditionsResult?.count || 0,
-      total_matters: totalMattersResult?.count || 0,
-      this_month: thisMonthResult?.count || 0
+      total_editions: parseInt(totalEditionsResult.rows[0]?.count || '0'),
+      total_matters: parseInt(totalMattersResult.rows[0]?.count || '0'),
+      this_month: parseInt(thisMonthResult.rows[0]?.count || '0')
     });
     
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error fetching portal stats:', error);
-    return c.json({ error: 'Erro ao buscar estatísticas' }, 500);
+    return c.json({ error: 'Erro ao buscar estatísticas', details: error.message }, 500);
   }
 });
 
 // GET /api/portal/editions - Últimas edições publicadas
 portal.get('/editions', async (c) => {
   try {
-    const { DB } = c.env;
     const limit = parseInt(c.req.query('limit') || '10');
     
     // Buscar últimas edições publicadas com contagem de matérias
-    const editions = await DB.prepare(`
+    const result = await db.query(`
       SELECT 
         e.id,
         e.edition_number,
@@ -64,23 +62,22 @@ portal.get('/editions', async (c) => {
       WHERE e.status = 'published'
       GROUP BY e.id
       ORDER BY e.published_at DESC
-      LIMIT ?
-    `).bind(limit).all();
+      LIMIT $1
+    `, [limit]);
     
     return c.json({
-      editions: editions.results || []
+      editions: result.rows || []
     });
     
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error fetching portal editions:', error);
-    return c.json({ error: 'Erro ao buscar edições' }, 500);
+    return c.json({ error: 'Erro ao buscar edições', details: error.message }, 500);
   }
 });
 
 // GET /api/portal/search - Pesquisa pública de publicações
 portal.get('/search', async (c) => {
   try {
-    const { DB } = c.env;
     const query = c.req.query('q') || '';
     const status = c.req.query('status') || 'published'; // Filtro de status
     const year = c.req.query('year') || '';
@@ -119,45 +116,51 @@ portal.get('/search', async (c) => {
     `;
     
     const params: any[] = [];
+    let paramCount = 1;
     
     // Filtro de status (padrão: apenas publicadas)
     if (status && status !== 'all') {
-      sqlQuery += ` AND m.status = ?`;
+      sqlQuery += ` AND m.status = $${paramCount}`;
       params.push(status);
+      paramCount++;
     }
     
     // Filtro de busca textual
     const searchPattern = `%${query.trim()}%`;
-    sqlQuery += ` AND (m.title LIKE ? OR m.content LIKE ?)`;
-    params.push(searchPattern, searchPattern);
+    sqlQuery += ` AND (m.title ILIKE $${paramCount} OR m.content ILIKE $${paramCount})`;
+    params.push(searchPattern);
+    paramCount++;
     
     // Filtro por ano
     if (year) {
-      sqlQuery += ` AND e.year = ?`;
+      sqlQuery += ` AND e.year = $${paramCount}`;
       params.push(parseInt(year));
+      paramCount++;
     }
     
     // Filtro por secretaria
     if (secretaria) {
-      sqlQuery += ` AND s.acronym = ?`;
+      sqlQuery += ` AND s.acronym = $${paramCount}`;
       params.push(secretaria);
+      paramCount++;
     }
     
     // Filtro por tipo
     if (type) {
-      sqlQuery += ` AND mt.name = ?`;
+      sqlQuery += ` AND mt.name = $${paramCount}`;
       params.push(type);
+      paramCount++;
     }
     
-    sqlQuery += ` ORDER BY m.created_at DESC LIMIT ?`;
+    sqlQuery += ` ORDER BY m.created_at DESC LIMIT $${paramCount}`;
     params.push(limit);
     
     // Executar query
-    const results = await DB.prepare(sqlQuery).bind(...params).all();
+    const result = await db.query(sqlQuery, params);
     
     return c.json({
-      results: results.results || [],
-      count: results.results?.length || 0,
+      results: result.rows || [],
+      count: result.rows?.length || 0,
       query: query,
       filters: {
         status,
@@ -167,98 +170,111 @@ portal.get('/search', async (c) => {
       }
     });
     
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error searching portal:', error);
-    return c.json({ error: 'Erro ao pesquisar publicações' }, 500);
+    return c.json({ error: 'Erro ao pesquisar publicações', details: error.message }, 500);
   }
 });
 
 // GET /api/portal/analytics - Estatísticas avançadas
 portal.get('/analytics', async (c) => {
   try {
-    const { DB } = c.env;
-    
     // Matérias por secretaria
-    const mattersBySecretaria = await DB.prepare(`
+    const mattersBySecretariaResult = await db.query(`
       SELECT 
         s.acronym,
         s.name,
         COUNT(m.id) as count
       FROM secretarias s
       LEFT JOIN matters m ON s.id = m.secretaria_id AND m.status = 'published'
-      GROUP BY s.id
+      GROUP BY s.id, s.acronym, s.name
       ORDER BY count DESC
       LIMIT 10
-    `).all();
+    `);
     
     // Tipos de matéria mais publicados
-    const mattersByType = await DB.prepare(`
+    const mattersByTypeResult = await db.query(`
       SELECT 
         mt.name,
         COUNT(m.id) as count
       FROM matter_types mt
       LEFT JOIN matters m ON mt.id = m.matter_type_id AND m.status = 'published'
-      GROUP BY mt.id
+      GROUP BY mt.id, mt.name
       ORDER BY count DESC
       LIMIT 10
-    `).all();
+    `);
     
-    // Tendência de publicações (últimos 6 meses)
-    const publicationTrend = await DB.prepare(`
+    // Tendência de publicações (últimos 6 meses) - PostgreSQL
+    const publicationTrendResult = await db.query(`
       SELECT 
-        strftime('%Y-%m', e.edition_date) as month,
+        TO_CHAR(e.edition_date, 'YYYY-MM') as month,
         COUNT(DISTINCT e.id) as editions,
         COUNT(m.id) as matters
       FROM editions e
       LEFT JOIN edition_matters em ON e.id = em.edition_id
       LEFT JOIN matters m ON em.matter_id = m.id
       WHERE e.status = 'published'
-      AND e.edition_date >= date('now', '-6 months')
-      GROUP BY month
+      AND e.edition_date >= CURRENT_DATE - INTERVAL '6 months'
+      GROUP BY TO_CHAR(e.edition_date, 'YYYY-MM')
       ORDER BY month ASC
-    `).all();
+    `);
+    
+    // Matérias mais recentes (opcional)
+    const recentMattersResult = await db.query(`
+      SELECT 
+        m.id,
+        m.title,
+        m.created_at,
+        s.acronym as secretaria_acronym,
+        mt.name as matter_type_name
+      FROM matters m
+      INNER JOIN secretarias s ON m.secretaria_id = s.id
+      INNER JOIN matter_types mt ON m.matter_type_id = mt.id
+      WHERE m.status = 'published'
+      ORDER BY m.created_at DESC
+      LIMIT 10
+    `);
     
     return c.json({
-      by_secretaria: mattersBySecretaria.results || [],
-      by_type: mattersByType.results || [],
-      trend: publicationTrend.results || []
+      by_secretaria: mattersBySecretariaResult.rows || [],
+      by_type: mattersByTypeResult.rows || [],
+      trend: publicationTrendResult.rows || [],
+      recent_matters: recentMattersResult.rows || []
     });
     
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error fetching analytics:', error);
-    return c.json({ error: 'Erro ao buscar análises' }, 500);
+    return c.json({ error: 'Erro ao buscar análises', details: error.message }, 500);
   }
 });
 
 // GET /api/portal/filters - Opções de filtros disponíveis
 portal.get('/filters', async (c) => {
   try {
-    const { DB } = c.env;
-    
     // Anos disponíveis
-    const years = await DB.prepare(`
+    const yearsResult = await db.query(`
       SELECT DISTINCT year FROM editions 
       WHERE status = 'published'
       ORDER BY year DESC
-    `).all();
+    `);
     
     // Secretarias com publicações
-    const secretarias = await DB.prepare(`
+    const secretariasResult = await db.query(`
       SELECT DISTINCT s.acronym, s.name 
       FROM secretarias s
       INNER JOIN matters m ON s.id = m.secretaria_id
       WHERE m.status = 'published'
       ORDER BY s.acronym
-    `).all();
+    `);
     
     // Tipos de matéria publicados
-    const types = await DB.prepare(`
+    const typesResult = await db.query(`
       SELECT DISTINCT mt.name 
       FROM matter_types mt
       INNER JOIN matters m ON mt.id = m.matter_type_id
       WHERE m.status = 'published'
       ORDER BY mt.name
-    `).all();
+    `);
     
     // Status disponíveis para administradores (no portal público, sempre "published")
     const statuses = [
@@ -269,35 +285,137 @@ portal.get('/filters', async (c) => {
       { value: 'rejected', label: 'Rejeitadas' }
     ];
     
+    // Secretarias ativas (mesmo sem publicações ainda)
+    const allSecretariasResult = await db.query(`
+      SELECT acronym, name 
+      FROM secretarias 
+      WHERE active = true
+      ORDER BY acronym
+    `);
+    
+    // Todos os tipos de matéria (mesmo sem publicações ainda)
+    const allTypesResult = await db.query(`
+      SELECT name 
+      FROM matter_types 
+      WHERE active = true
+      ORDER BY name
+    `);
+    
     return c.json({
-      years: years.results || [],
-      secretarias: secretarias.results || [],
-      types: types.results || [],
+      years: yearsResult.rows || [],
+      secretarias: secretariasResult.rows || [],
+      all_secretarias: allSecretariasResult.rows || [],
+      types: typesResult.rows || [],
+      all_types: allTypesResult.rows || [],
       statuses: statuses
     });
     
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error fetching filters:', error);
-    return c.json({ error: 'Erro ao buscar filtros' }, 500);
+    return c.json({ error: 'Erro ao buscar filtros', details: error.message }, 500);
   }
 });
 
 // GET /api/portal/most-searched - Palavras mais pesquisadas (simulado)
 portal.get('/most-searched', async (c) => {
-  // Por enquanto, retornar termos fixos
   // Em produção, você pode rastrear pesquisas em uma tabela search_logs
-  const terms = [
-    { term: 'Decreto', count: 156 },
-    { term: 'Portaria', count: 134 },
-    { term: 'Edital', count: 98 },
-    { term: 'Licitação', count: 87 },
-    { term: 'Concurso', count: 76 },
-    { term: 'Contrato', count: 65 },
-    { term: 'Nomeação', count: 54 },
-    { term: 'Exoneração', count: 43 }
-  ];
+  // Por enquanto, retornar termos fixos ou buscar do banco se houver tabela
   
-  return c.json({ terms });
+  try {
+    // Verificar se existe tabela de logs de busca
+    const hasSearchLogsResult = await db.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'search_logs'
+      )
+    `);
+    
+    const hasSearchLogs = hasSearchLogsResult.rows[0]?.exists;
+    
+    if (hasSearchLogs) {
+      // Buscar termos mais pesquisados
+      const searchTermsResult = await db.query(`
+        SELECT 
+          query_term as term,
+          COUNT(*) as count
+        FROM search_logs
+        WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+        GROUP BY query_term
+        ORDER BY count DESC
+        LIMIT 10
+      `);
+      
+      if (searchTermsResult.rows.length > 0) {
+        return c.json({ terms: searchTermsResult.rows });
+      }
+    }
+    
+    // Retornar termos padrão se não houver tabela ou dados
+    const terms = [
+      { term: 'Decreto', count: 156 },
+      { term: 'Portaria', count: 134 },
+      { term: 'Edital', count: 98 },
+      { term: 'Licitação', count: 87 },
+      { term: 'Concurso', count: 76 },
+      { term: 'Contrato', count: 65 },
+      { term: 'Nomeação', count: 54 },
+      { term: 'Exoneração', count: 43 }
+    ];
+    
+    return c.json({ terms });
+    
+  } catch (error: any) {
+    console.error('Error fetching most searched:', error);
+    // Retornar termos fixos em caso de erro
+    const terms = [
+      { term: 'Decreto', count: 156 },
+      { term: 'Portaria', count: 134 },
+      { term: 'Edital', count: 98 }
+    ];
+    return c.json({ terms });
+  }
+});
+
+// GET /api/portal/secretarias - Lista de secretarias ativas
+portal.get('/secretarias', async (c) => {
+  try {
+    const result = await db.query(`
+      SELECT id, name, acronym, email, phone, responsible
+      FROM secretarias 
+      WHERE active = true
+      ORDER BY name
+    `);
+    
+    return c.json({
+      secretarias: result.rows || []
+    });
+    
+  } catch (error: any) {
+    console.error('Error fetching secretarias:', error);
+    return c.json({ error: 'Erro ao buscar secretarias', details: error.message }, 500);
+  }
+});
+
+// GET /api/portal/years - Anos com publicações
+portal.get('/years', async (c) => {
+  try {
+    const result = await db.query(`
+      SELECT DISTINCT year 
+      FROM editions 
+      WHERE status = 'published'
+      ORDER BY year DESC
+    `);
+    
+    const years = result.rows.map(row => row.year);
+    
+    return c.json({
+      years: years
+    });
+    
+  } catch (error: any) {
+    console.error('Error fetching years:', error);
+    return c.json({ error: 'Erro ao buscar anos', details: error.message }, 500);
+  }
 });
 
 export default portal;

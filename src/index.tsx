@@ -28,7 +28,7 @@ const app = new Hono<HonoContext>();
 app.use('/api/*', cors());
 
 // Serve static files
-app.use('/static/*', serveStatic({ root: './public' }));
+app.use('/static/*', serveStatic({ root: './public/' }));
 
 // Serve favicon - return empty 204 to avoid 404 error
 app.get('/favicon.ico', (c) => {

@@ -6,6 +6,7 @@
 import { Hono } from 'hono';
 import { HonoContext } from '../types';
 import { authMiddleware, requireRole } from '../middleware/auth';
+import db from '../lib/db'; // Importe a conexão PostgreSQL
 
 const holidays = new Hono<HonoContext>();
 
@@ -24,14 +25,16 @@ holidays.get('/', async (c) => {
     const params: any[] = [];
     
     if (year) {
-      query += ` AND strftime('%Y', date) = ?`;
+      // PostgreSQL usa EXTRACT(YEAR FROM date) para extrair o ano
+      query += ` AND EXTRACT(YEAR FROM date) = $1`;
       params.push(year);
     }
     
     query += ' ORDER BY date ASC';
     
-    const stmt = db.query(query);
-    const { results } = await (params.length > 0 ? stmt.bind(...params) : stmt).all();
+    const result = params.length > 0 
+      ? await db.query(query, params)
+      : await db.query(query);
     
     // Mapear tipos do banco (português) para frontend (inglês)
     const reverseTypeMap: Record<string, string> = {
@@ -41,7 +44,7 @@ holidays.get('/', async (c) => {
       'ponto_facultativo': 'optional'
     };
     
-    const mappedResults = (results as any[]).map(h => ({
+    const mappedResults = result.rows.map((h: any) => ({
       ...h,
       type: reverseTypeMap[h.type] || h.type,
       is_recurring: h.recurring // Adicionar alias para frontend
@@ -63,9 +66,12 @@ holidays.get('/:id', async (c) => {
   try {
     const id = parseInt(c.req.param('id'));
     
-    const holiday = await db.query(
-      'SELECT * FROM holidays WHERE id = ?'
-    ).bind(id).first<any>();
+    const result = await db.query(
+      'SELECT * FROM holidays WHERE id = $1',
+      [id]
+    );
+    
+    const holiday = result.rows[0];
     
     if (!holiday) {
       return c.json({ error: 'Feriado não encontrado' }, 404);
@@ -100,6 +106,10 @@ holidays.get('/:id', async (c) => {
 holidays.post('/', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const { date, name, type, is_recurring } = await c.req.json();
     
     if (!date || !name || !type) {
@@ -122,11 +132,12 @@ holidays.post('/', requireRole('admin'), async (c) => {
     const dbType = typeMap[type] || type;
     
     // Verificar se já existe feriado nesta data
-    const existing = await db.query(
-      'SELECT id FROM holidays WHERE date = ?'
-    ).bind(date).first();
+    const existingResult = await db.query(
+      'SELECT id FROM holidays WHERE date = $1',
+      [date]
+    );
     
-    if (existing) {
+    if (existingResult.rows.length > 0) {
       return c.json({ error: 'Já existe um feriado cadastrado nesta data' }, 400);
     }
     
@@ -136,15 +147,18 @@ holidays.post('/', requireRole('admin'), async (c) => {
     const result = await db.query(`
       INSERT INTO holidays (
         date, name, type, recurring, year, active, created_at, created_by
-      ) VALUES (?, ?, ?, ?, ?, 1, datetime('now'), ?)
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, true, NOW(), $6)
+      RETURNING id
+    `, [
       date,
       name,
       dbType,  // Usar valor mapeado para português
       is_recurring ? 1 : 0,
       year,
       user.id
-    ).run();
+    ]);
+    
+    const holidayId = result.rows[0].id;
     
     // Audit log
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -154,20 +168,20 @@ holidays.post('/', requireRole('admin'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
       user.id,
       'holiday',
-      result.meta.last_row_id,
+      holidayId,
       'create',
       JSON.stringify({ date, name, type, is_recurring }),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({ 
       message: 'Feriado criado com sucesso',
-      id: result.meta.last_row_id
+      id: holidayId
     }, 201);
     
   } catch (error: any) {
@@ -183,13 +197,20 @@ holidays.post('/', requireRole('admin'), async (c) => {
 holidays.put('/:id', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const id = parseInt(c.req.param('id'));
     const { date, name, type, is_recurring } = await c.req.json();
     
     // Verificar se existe
-    const existing = await db.query(
-      'SELECT * FROM holidays WHERE id = ?'
-    ).bind(id).first<any>();
+    const existingResult = await db.query(
+      'SELECT * FROM holidays WHERE id = $1',
+      [id]
+    );
+    
+    const existing = existingResult.rows[0];
     
     if (!existing) {
       return c.json({ error: 'Feriado não encontrado' }, 404);
@@ -215,11 +236,12 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
     
     // Verificar conflito de data
     if (date && date !== existing.date) {
-      const dateConflict = await db.query(
-        'SELECT id FROM holidays WHERE date = ? AND id != ?'
-      ).bind(date, id).first();
+      const dateConflictResult = await db.query(
+        'SELECT id FROM holidays WHERE date = $1 AND id != $2',
+        [date, id]
+      );
       
-      if (dateConflict) {
+      if (dateConflictResult.rows.length > 0) {
         return c.json({ error: 'Já existe um feriado cadastrado nesta data' }, 400);
       }
     }
@@ -230,20 +252,20 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
     
     await db.query(`
       UPDATE holidays 
-      SET date = ?,
-          name = ?,
-          type = ?,
-          recurring = ?,
-          year = ?
-      WHERE id = ?
-    `).bind(
+      SET date = $1,
+          name = $2,
+          type = $3,
+          recurring = $4,
+          year = $5
+      WHERE id = $6
+    `, [
       finalDate,
       name || existing.name,
       dbType,  // Usar valor mapeado
       is_recurring !== undefined ? (is_recurring ? 1 : 0) : existing.recurring,
       year,
       id
-    ).run();
+    ]);
     
     // Audit log
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -253,8 +275,8 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, new_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+    `, [
       user.id,
       'holiday',
       id,
@@ -263,7 +285,7 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
       JSON.stringify({ date, name, type, is_recurring }),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({ message: 'Feriado atualizado com sucesso' });
     
@@ -280,19 +302,26 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
 holidays.delete('/:id', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const id = parseInt(c.req.param('id'));
     
     // Verificar se existe
-    const holiday = await db.query(
-      'SELECT * FROM holidays WHERE id = ?'
-    ).bind(id).first();
+    const holidayResult = await db.query(
+      'SELECT * FROM holidays WHERE id = $1',
+      [id]
+    );
+    
+    const holiday = holidayResult.rows[0];
     
     if (!holiday) {
       return c.json({ error: 'Feriado não encontrado' }, 404);
     }
     
     // Deletar feriado
-    await db.query('DELETE FROM holidays WHERE id = ?').bind(id).run();
+    await db.query('DELETE FROM holidays WHERE id = $1', [id]);
     
     // Audit log
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -302,8 +331,8 @@ holidays.delete('/:id', requireRole('admin'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
       user.id,
       'holiday',
       id,
@@ -311,13 +340,114 @@ holidays.delete('/:id', requireRole('admin'), async (c) => {
       JSON.stringify(holiday),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({ message: 'Feriado removido com sucesso' });
     
   } catch (error: any) {
     console.error('Error deleting holiday:', error);
     return c.json({ error: 'Erro ao deletar feriado', details: error.message }, 500);
+  }
+});
+
+/**
+ * POST /api/holidays/generate-year
+ * Gera feriados recorrentes para um ano específico
+ */
+holidays.post('/generate-year', requireRole('admin'), async (c) => {
+  try {
+    const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
+    const { year } = await c.req.json();
+    
+    if (!year || year < 1900 || year > 2100) {
+      return c.json({ error: 'Ano inválido. Deve estar entre 1900 e 2100' }, 400);
+    }
+    
+    // Buscar feriados recorrentes
+    const recurringResult = await db.query(
+      'SELECT * FROM holidays WHERE recurring = 1 AND active = 1'
+    );
+    
+    const recurringHolidays = recurringResult.rows;
+    let created = 0;
+    let skipped = 0;
+    
+    // Para cada feriado recorrente, criar para o ano especificado
+    for (const holiday of recurringHolidays) {
+      try {
+        // Extrair mês e dia da data original
+        const originalDate = new Date(holiday.date);
+        const month = originalDate.getMonth() + 1; // Mês 0-indexed
+        const day = originalDate.getDate();
+        
+        // Criar nova data para o ano especificado
+        const newDate = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+        
+        // Verificar se já existe
+        const existingResult = await db.query(
+          'SELECT id FROM holidays WHERE date = $1',
+          [newDate]
+        );
+        
+        if (existingResult.rows.length > 0) {
+          skipped++;
+          continue;
+        }
+        
+        // Criar novo feriado
+        await db.query(`
+          INSERT INTO holidays (
+            date, name, type, recurring, year, active, created_at, created_by
+          ) VALUES ($1, $2, $3, 0, $4, true, NOW(), $5)
+        `, [
+          newDate,
+          holiday.name,
+          holiday.type,
+          year,
+          user.id
+        ]);
+        
+        created++;
+        
+      } catch (err) {
+        console.error(`Error generating holiday ${holiday.id} for year ${year}:`, err);
+        skipped++;
+      }
+    }
+    
+    // Audit log
+    const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
+    const userAgent = c.req.header('user-agent') || 'unknown';
+    
+    await db.query(`
+      INSERT INTO audit_logs (
+        user_id, entity_type, entity_id, action,
+        new_values, ip_address, user_agent, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
+      user.id,
+      'holiday',
+      null,
+      'generate_year',
+      JSON.stringify({ year, created, skipped, total_recurring: recurringHolidays.length }),
+      ipAddress,
+      userAgent
+    ]);
+    
+    return c.json({
+      message: `Geração de feriados para ${year} concluída`,
+      created,
+      skipped,
+      total_recurring: recurringHolidays.length
+    });
+    
+  } catch (error: any) {
+    console.error('Error generating holidays for year:', error);
+    return c.json({ error: 'Erro ao gerar feriados', details: error.message }, 500);
   }
 });
 

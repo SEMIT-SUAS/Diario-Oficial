@@ -5,8 +5,8 @@
 import { Hono } from 'hono';
 import { HonoContext } from '../types';
 import { authMiddleware, requireRole } from '../middleware/auth';
-import { getCurrentTimestamp, formatDate } from '../utils/date';
-import { generateEditionPDF } from '../utils/pdf-generator';
+import { getCurrentTimestamp } from '../utils/date';
+import db from '../lib/db'; // Importe a conexão PostgreSQL
 
 const editions = new Hono<HonoContext>();
 
@@ -17,28 +17,32 @@ editions.get('/:id/pdf', async (c) => {
     const id = parseInt(c.req.param('id'));
     
     // Buscar edição publicada com informação da edição pai (se suplementar)
-    const edition = await db.query(`
+    const result = await db.query(`
       SELECT e.*, 
              parent.edition_number as parent_edition_number
       FROM editions e
       LEFT JOIN editions parent ON e.parent_edition_id = parent.id
-      WHERE e.id = ? AND e.status = ?
-    `).bind(id, 'published').first();
+      WHERE e.id = $1 AND e.status = $2
+    `, [id, 'published']);
+    
+    const edition = result.rows[0];
     
     if (!edition) {
       return c.json({ error: 'Edição não encontrada ou não publicada' }, 404);
     }
     
     // Buscar informações do publicador
-    const publisher = await db.query(`
+    const publisherResult = await db.query(`
       SELECT u.name, s.acronym as secretaria_acronym
       FROM users u
       LEFT JOIN secretarias s ON u.secretaria_id = s.id
-      WHERE u.id = ?
-    `).bind(edition.published_by).first();
+      WHERE u.id = $1
+    `, [edition.published_by]);
+    
+    const publisher = publisherResult.rows[0];
     
     // Buscar matérias da edição para gerar HTML
-    const { results: matters } = await db.query(`
+    const mattersResult = await db.query(`
       SELECT 
         m.*,
         s.name as secretaria_name,
@@ -51,33 +55,40 @@ editions.get('/:id/pdf', async (c) => {
       LEFT JOIN secretarias s ON m.secretaria_id = s.id
       LEFT JOIN users u ON m.author_id = u.id
       LEFT JOIN matter_types mt ON m.matter_type_id = mt.id
-      WHERE em.edition_id = ?
+      WHERE em.edition_id = $1
       ORDER BY em.display_order ASC
-    `).bind(id).all();
+    `, [id]);
+    
+    const matters = mattersResult.rows;
     
     // Buscar anexos de cada matéria
     const mattersWithAttachments = await Promise.all(
-      (matters as any[]).map(async (matter) => {
-        const { results: attachments } = await db.query(`
+      matters.map(async (matter) => {
+        const attachmentsResult = await db.query(`
           SELECT id, filename, file_url, file_size, file_type, original_name
           FROM attachments
-          WHERE matter_id = ?
-        `).bind(matter.id).all();
+          WHERE matter_id = $1
+        `, [matter.id]);
         
         return {
           ...matter,
-          attachments: attachments || []
+          attachments: attachmentsResult.rows || []
         };
       })
     );
     
     // Gerar PDF novamente (contém o HTML)
     const { generateEditionPDF } = await import('../utils/pdf-generator');
-    const pdfResult = await generateEditionPDF(c.env.R2, {
-      edition: edition as any,
-      matters: mattersWithAttachments as any[],
-      publisher: publisher as any
-    }, db.query);
+    const pdfResult = await generateEditionPDF({} as any, {
+      edition: edition,
+      matters: mattersWithAttachments,
+      publisher: publisher
+    }, db);
+    
+    // Verificar se pdfResult.htmlContent existe
+    if (!pdfResult.htmlContent) {
+      throw new Error('HTML content não gerado');
+    }
     
     // Retornar HTML diretamente para download
     const filename = `diario-oficial-${edition.edition_number.replace(/\//g, '-')}-${edition.year}.html`;
@@ -86,7 +97,7 @@ editions.get('/:id/pdf', async (c) => {
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
         'Content-Disposition': `attachment; filename="${filename}"`,
-        'X-Content-Hash': pdfResult.hash
+        'X-Content-Hash': pdfResult.hash || ''
       }
     });
     
@@ -106,16 +117,22 @@ editions.use('/*', authMiddleware);
 editions.get('/:id/preview', async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const id = parseInt(c.req.param('id'));
     
     // Buscar edição (permite draft para preview)
-    const edition = await db.query(`
+    const result = await db.query(`
       SELECT e.*, 
              parent.edition_number as parent_edition_number
       FROM editions e
       LEFT JOIN editions parent ON e.parent_edition_id = parent.id
-      WHERE e.id = ?
-    `).bind(id).first();
+      WHERE e.id = $1
+    `, [id]);
+    
+    const edition = result.rows[0];
     
     if (!edition) {
       return c.json({ error: 'Edição não encontrada' }, 404);
@@ -124,16 +141,17 @@ editions.get('/:id/preview', async (c) => {
     // Buscar informações do publicador (se existir)
     let publisher = null;
     if (edition.published_by) {
-      publisher = await db.query(`
+      const publisherResult = await db.query(`
         SELECT u.name, s.acronym as secretaria_acronym
         FROM users u
         LEFT JOIN secretarias s ON u.secretaria_id = s.id
-        WHERE u.id = ?
-      `).bind(edition.published_by).first();
+        WHERE u.id = $1
+      `, [edition.published_by]);
+      publisher = publisherResult.rows[0];
     }
     
     // Buscar matérias da edição
-    const { results: matters } = await db.query(`
+    const mattersResult = await db.query(`
       SELECT 
         m.*,
         s.name as secretaria_name,
@@ -146,33 +164,40 @@ editions.get('/:id/preview', async (c) => {
       LEFT JOIN secretarias s ON m.secretaria_id = s.id
       LEFT JOIN users u ON m.author_id = u.id
       LEFT JOIN matter_types mt ON m.matter_type_id = mt.id
-      WHERE em.edition_id = ?
+      WHERE em.edition_id = $1
       ORDER BY em.display_order ASC
-    `).bind(id).all();
+    `, [id]);
+    
+    const matters = mattersResult.rows;
     
     // Buscar anexos
     const mattersWithAttachments = await Promise.all(
-      (matters as any[]).map(async (matter) => {
-        const { results: attachments } = await db.query(`
+      matters.map(async (matter) => {
+        const attachmentsResult = await db.query(`
           SELECT id, filename, file_url, file_size, file_type, original_name
           FROM attachments
-          WHERE matter_id = ?
-        `).bind(matter.id).all();
+          WHERE matter_id = $1
+        `, [matter.id]);
         
         return {
           ...matter,
-          attachments: attachments || []
+          attachments: attachmentsResult.rows || []
         };
       })
     );
     
     // Gerar HTML (sem salvar no R2)
     const { generateEditionPDF } = await import('../utils/pdf-generator');
-    const pdfResult = await generateEditionPDF(c.env.R2, {
-      edition: edition as any,
-      matters: mattersWithAttachments as any[],
-      publisher: publisher as any
-    }, db.query);
+    const pdfResult = await generateEditionPDF({} as any, {
+      edition: edition,
+      matters: mattersWithAttachments,
+      publisher: publisher
+    }, db);
+    
+    // Verificar se pdfResult.htmlContent existe
+    if (!pdfResult.htmlContent) {
+      throw new Error('HTML content não gerado');
+    }
     
     // Adicionar cabeçalho de preview ao HTML
     const previewHTML = `
@@ -314,57 +339,58 @@ editions.get('/', async (c) => {
     `;
     
     const params: any[] = [];
+    let paramIndex = 1;
     
     if (status) {
-      query += ` AND e.status = ?`;
+      query += ` AND e.status = $${paramIndex++}`;
       params.push(status);
     }
     
     if (year) {
-      query += ` AND e.year = ?`;
+      query += ` AND e.year = $${paramIndex++}`;
       params.push(parseInt(year));
     }
     
     if (search) {
-      query += ` AND (e.edition_number LIKE ? OR e.year LIKE ?)`;
+      query += ` AND (e.edition_number LIKE $${paramIndex++} OR e.year::text LIKE $${paramIndex++})`;
       params.push(`%${search}%`, `%${search}%`);
     }
     
     query += `
-      GROUP BY e.id
+      GROUP BY e.id, u.name
       ORDER BY e.edition_date DESC, e.edition_number DESC
-      LIMIT ? OFFSET ?
+      LIMIT $${paramIndex++} OFFSET $${paramIndex}
     `;
     
     const offset = (parseInt(page) - 1) * parseInt(limit);
     params.push(parseInt(limit), offset);
     
-    const stmt = db.query(query).bind(...params);
-    const { results } = await stmt.all();
+    const result = await db.query(query, params);
     
     // Contar total para paginação
     let countQuery = 'SELECT COUNT(*) as total FROM editions WHERE 1=1';
     const countParams: any[] = [];
+    let countIndex = 1;
     
     if (status) {
-      countQuery += ' AND status = ?';
+      countQuery += ` AND status = $${countIndex++}`;
       countParams.push(status);
     }
     if (year) {
-      countQuery += ' AND year = ?';
+      countQuery += ` AND year = $${countIndex++}`;
       countParams.push(parseInt(year));
     }
     
-    const countResult = await db.query(countQuery).bind(...countParams).first();
-    const total = countResult?.total || 0;
+    const countResult = await db.query(countQuery, countParams);
+    const total = parseInt(countResult.rows[0]?.total) || 0;
     
     return c.json({
-      editions: results,
+      editions: result.rows,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
-        total: total as number,
-        pages: Math.ceil((total as number) / parseInt(limit))
+        total: total,
+        pages: Math.ceil(total / parseInt(limit))
       }
     });
     
@@ -383,21 +409,23 @@ editions.get('/:id', async (c) => {
     const id = parseInt(c.req.param('id'));
     
     // Buscar edição
-    const edition = await db.query(`
+    const result = await db.query(`
       SELECT 
         e.*,
         u.name as published_by_name
       FROM editions e
       LEFT JOIN users u ON e.published_by = u.id
-      WHERE e.id = ?
-    `).bind(id).first();
+      WHERE e.id = $1
+    `, [id]);
+    
+    const edition = result.rows[0];
     
     if (!edition) {
       return c.json({ error: 'Edição não encontrada' }, 404);
     }
     
     // Buscar matérias da edição
-    const { results: matters } = await db.query(`
+    const mattersResult = await db.query(`
       SELECT 
         m.*,
         em.display_order,
@@ -411,13 +439,13 @@ editions.get('/:id', async (c) => {
       INNER JOIN matters m ON em.matter_id = m.id
       LEFT JOIN secretarias s ON m.secretaria_id = s.id
       LEFT JOIN users u ON m.author_id = u.id
-      WHERE em.edition_id = ?
+      WHERE em.edition_id = $1
       ORDER BY em.display_order ASC
-    `).bind(id).all();
+    `, [id]);
     
     return c.json({
       ...edition,
-      matters: matters || []
+      matters: mattersResult.rows || []
     });
     
   } catch (error: any) {
@@ -435,6 +463,10 @@ editions.get('/:id', async (c) => {
 editions.post('/', requireRole('admin', 'semad'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     let { edition_number, edition_date, year, is_supplemental = false } = await c.req.json();
     
     // Data automática (hoje) se não fornecida
@@ -451,16 +483,18 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
     if (!edition_number) {
       if (is_supplemental) {
         // Para edição suplementar: buscar último suplemento do ano
-        const lastSupplement = await db.query(`
+        const lastSupplementResult = await db.query(`
           SELECT edition_number, supplemental_number FROM editions 
-          WHERE year = ? AND is_supplemental = 1
+          WHERE year = $1 AND is_supplemental = true
           ORDER BY CAST(COALESCE(supplemental_number, '0') AS INTEGER) DESC 
           LIMIT 1
-        `).bind(parseInt(year)).first();
+        `, [parseInt(year)]);
         
+        const lastSupplement = lastSupplementResult.rows[0];
         let nextSupplementNumber = 1;
+        
         if (lastSupplement && lastSupplement.supplemental_number) {
-          nextSupplementNumber = parseInt(lastSupplement.supplemental_number as string) + 1;
+          nextSupplementNumber = parseInt(lastSupplement.supplemental_number) + 1;
         }
         
         // Formato: "001-S/2025" para suplementares
@@ -469,17 +503,19 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
         
       } else {
         // Para edição normal: buscar última edição normal do ano
-        const lastEdition = await db.query(`
+        const lastEditionResult = await db.query(`
           SELECT edition_number FROM editions 
-          WHERE year = ? AND (is_supplemental = 0 OR is_supplemental IS NULL)
-          ORDER BY CAST(substr(edition_number, 1, instr(edition_number, '/') - 1) AS INTEGER) DESC 
+          WHERE year = $1 AND (is_supplemental = false OR is_supplemental IS NULL)
+          ORDER BY CAST(SUBSTRING(edition_number FROM '^\\d+') AS INTEGER) DESC 
           LIMIT 1
-        `).bind(parseInt(year)).first();
+        `, [parseInt(year)]);
         
+        const lastEdition = lastEditionResult.rows[0];
         let nextNumber = 1;
+        
         if (lastEdition && lastEdition.edition_number) {
           // Extrair número da edição (ex: "001/2025" -> 1)
-          const match = (lastEdition.edition_number as string).match(/^(\d+)/);
+          const match = lastEdition.edition_number.match(/^(\d+)/);
           if (match) {
             nextNumber = parseInt(match[1]) + 1;
           }
@@ -501,27 +537,28 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Verificar se já existe edição com esse número
-    const existing = await db.query(
-      'SELECT id FROM editions WHERE edition_number = ?'
-    ).bind(edition_number).first();
+    const existingResult = await db.query(
+      'SELECT id FROM editions WHERE edition_number = $1',
+      [edition_number]
+    );
     
-    if (existing) {
+    if (existingResult.rows.length > 0) {
       return c.json({ error: 'Já existe uma edição com este número' }, 400);
     }
     
     // Se for suplementar, buscar edição normal do mesmo dia para referenciar
     let parent_edition_id = null;
     if (is_supplemental) {
-      const parentEdition = await db.query(`
+      const parentEditionResult = await db.query(`
         SELECT id, edition_number FROM editions 
-        WHERE edition_date = ? 
-        AND (is_supplemental = 0 OR is_supplemental IS NULL)
+        WHERE edition_date = $1 
+        AND (is_supplemental = false OR is_supplemental IS NULL)
         AND status = 'published'
         LIMIT 1
-      `).bind(edition_date).first();
+      `, [edition_date]);
       
-      if (parentEdition) {
-        parent_edition_id = parentEdition.id;
+      if (parentEditionResult.rows[0]) {
+        parent_edition_id = parentEditionResult.rows[0].id;
       }
     }
     
@@ -531,17 +568,18 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
         edition_number, edition_date, year, status,
         is_supplemental, supplemental_number, parent_edition_id,
         created_at, updated_at
-      ) VALUES (?, ?, ?, 'draft', ?, ?, ?, datetime('now'), datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, 'draft', $4, $5, $6, NOW(), NOW())
+      RETURNING id
+    `, [
       edition_number, 
       edition_date, 
       parseInt(year), 
-      is_supplemental ? 1 : 0,
+      is_supplemental,
       supplemental_number,
       parent_edition_id
-    ).run();
+    ]);
     
-    const editionId = result.meta.last_row_id;
+    const editionId = result.rows[0].id;
     
     // Log de auditoria
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -551,8 +589,8 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
       user.id,
       'edition',
       editionId,
@@ -560,7 +598,7 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
       JSON.stringify({ edition_number, edition_date, year, is_supplemental }),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({
       message: is_supplemental ? 'Edição suplementar criada com sucesso' : 'Edição criada com sucesso',
@@ -587,13 +625,20 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
 editions.put('/:id', requireRole('admin', 'semad'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const id = parseInt(c.req.param('id'));
     const { edition_number, edition_date, year } = await c.req.json();
     
     // Verificar se edição existe
-    const edition = await db.query(
-      'SELECT * FROM editions WHERE id = ?'
-    ).bind(id).first();
+    const result = await db.query(
+      'SELECT * FROM editions WHERE id = $1',
+      [id]
+    );
+    
+    const edition = result.rows[0];
     
     if (!edition) {
       return c.json({ error: 'Edição não encontrada' }, 404);
@@ -609,10 +654,10 @@ editions.put('/:id', requireRole('admin', 'semad'), async (c) => {
     // Atualizar edição
     await db.query(`
       UPDATE editions 
-      SET edition_number = ?, edition_date = ?, year = ?,
-          updated_at = datetime('now')
-      WHERE id = ?
-    `).bind(edition_number, edition_date, parseInt(year), id).run();
+      SET edition_number = $1, edition_date = $2, year = $3,
+          updated_at = NOW()
+      WHERE id = $4
+    `, [edition_number, edition_date, parseInt(year), id]);
     
     // Log de auditoria
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -622,8 +667,8 @@ editions.put('/:id', requireRole('admin', 'semad'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, new_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+    `, [
       user.id,
       'edition',
       id,
@@ -632,7 +677,7 @@ editions.put('/:id', requireRole('admin', 'semad'), async (c) => {
       JSON.stringify({ edition_number, edition_date, year }),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({ message: 'Edição atualizada com sucesso' });
     
@@ -649,13 +694,20 @@ editions.put('/:id', requireRole('admin', 'semad'), async (c) => {
 editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const editionId = parseInt(c.req.param('id'));
     const { matter_id } = await c.req.json();
     
     // Verificar se edição existe e não está publicada
-    const edition = await db.query(
-      'SELECT * FROM editions WHERE id = ?'
-    ).bind(editionId).first();
+    const editionResult = await db.query(
+      'SELECT * FROM editions WHERE id = $1',
+      [editionId]
+    );
+    
+    const edition = editionResult.rows[0];
     
     if (!edition) {
       return c.json({ error: 'Edição não encontrada' }, 404);
@@ -668,9 +720,12 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Verificar se matéria existe e está aprovada
-    const matter = await db.query(
-      'SELECT * FROM matters WHERE id = ?'
-    ).bind(matter_id).first();
+    const matterResult = await db.query(
+      'SELECT * FROM matters WHERE id = $1',
+      [matter_id]
+    );
+    
+    const matter = matterResult.rows[0];
     
     if (!matter) {
       return c.json({ error: 'Matéria não encontrada' }, 404);
@@ -683,32 +738,35 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Verificar se matéria já está na edição
-    const existing = await db.query(
-      'SELECT id FROM edition_matters WHERE edition_id = ? AND matter_id = ?'
-    ).bind(editionId, matter_id).first();
+    const existingResult = await db.query(
+      'SELECT id FROM edition_matters WHERE edition_id = $1 AND matter_id = $2',
+      [editionId, matter_id]
+    );
     
-    if (existing) {
+    if (existingResult.rows.length > 0) {
       return c.json({ error: 'Matéria já está nesta edição' }, 400);
     }
     
     // Buscar próxima ordem de exibição
-    const lastOrder = await db.query(
-      'SELECT MAX(display_order) as max_order FROM edition_matters WHERE edition_id = ?'
-    ).bind(editionId).first();
+    const lastOrderResult = await db.query(
+      'SELECT MAX(display_order) as max_order FROM edition_matters WHERE edition_id = $1',
+      [editionId]
+    );
     
-    const nextOrder = (lastOrder?.max_order || 0) + 1;
+    const nextOrder = (lastOrderResult.rows[0]?.max_order || 0) + 1;
     
     // Adicionar matéria à edição
     await db.query(`
       INSERT INTO edition_matters (
         edition_id, matter_id, display_order, added_by, added_at
-      ) VALUES (?, ?, ?, ?, datetime('now'))
-    `).bind(editionId, matter_id, nextOrder, user.id).run();
+      ) VALUES ($1, $2, $3, $4, NOW())
+    `, [editionId, matter_id, nextOrder, user.id]);
     
     // Atualizar campo edition_id na matéria
     await db.query(
-      'UPDATE matters SET edition_id = ?, updated_at = datetime(\'now\') WHERE id = ?'
-    ).bind(editionId, matter_id).run();
+      'UPDATE matters SET edition_id = $1, updated_at = NOW() WHERE id = $2',
+      [editionId, matter_id]
+    );
     
     // Log de auditoria
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -718,8 +776,8 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
       user.id,
       'edition_matter',
       editionId,
@@ -727,7 +785,7 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
       JSON.stringify({ matter_id, display_order: nextOrder }),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({ 
       message: 'Matéria adicionada à edição com sucesso',
@@ -747,6 +805,10 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
 editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const editionId = parseInt(c.req.param('id'));
     const { matter_ids } = await c.req.json(); // Array de IDs
     
@@ -755,9 +817,12 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Verificar se edição existe e não está publicada
-    const edition = await db.query(
-      'SELECT * FROM editions WHERE id = ?'
-    ).bind(editionId).first();
+    const editionResult = await db.query(
+      'SELECT * FROM editions WHERE id = $1',
+      [editionId]
+    );
+    
+    const edition = editionResult.rows[0];
     
     if (!edition) {
       return c.json({ error: 'Edição não encontrada' }, 404);
@@ -770,11 +835,12 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Buscar próxima ordem de exibição
-    const lastOrder = await db.query(
-      'SELECT MAX(display_order) as max_order FROM edition_matters WHERE edition_id = ?'
-    ).bind(editionId).first();
+    const lastOrderResult = await db.query(
+      'SELECT MAX(display_order) as max_order FROM edition_matters WHERE edition_id = $1',
+      [editionId]
+    );
     
-    let currentOrder = (lastOrder?.max_order || 0) + 1;
+    let currentOrder = (lastOrderResult.rows[0]?.max_order || 0) + 1;
     
     const results = {
       added: [] as number[],
@@ -785,9 +851,12 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
     for (const matterId of matter_ids) {
       try {
         // Verificar se matéria existe e está aprovada
-        const matter = await db.query(
-          'SELECT * FROM matters WHERE id = ?'
-        ).bind(matterId).first();
+        const matterResult = await db.query(
+          'SELECT * FROM matters WHERE id = $1',
+          [matterId]
+        );
+        
+        const matter = matterResult.rows[0];
         
         if (!matter) {
           results.skipped.push({ id: matterId, reason: 'Matéria não encontrada' });
@@ -800,11 +869,12 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
         }
         
         // Verificar se matéria já está na edição
-        const existing = await db.query(
-          'SELECT id FROM edition_matters WHERE edition_id = ? AND matter_id = ?'
-        ).bind(editionId, matterId).first();
+        const existingResult = await db.query(
+          'SELECT id FROM edition_matters WHERE edition_id = $1 AND matter_id = $2',
+          [editionId, matterId]
+        );
         
-        if (existing) {
+        if (existingResult.rows.length > 0) {
           results.skipped.push({ id: matterId, reason: 'Matéria já está nesta edição' });
           continue;
         }
@@ -813,13 +883,14 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
         await db.query(`
           INSERT INTO edition_matters (
             edition_id, matter_id, display_order, added_by, added_at
-          ) VALUES (?, ?, ?, ?, datetime('now'))
-        `).bind(editionId, matterId, currentOrder, user.id).run();
+          ) VALUES ($1, $2, $3, $4, NOW())
+        `, [editionId, matterId, currentOrder, user.id]);
         
         // Atualizar campo edition_id na matéria
         await db.query(
-          'UPDATE matters SET edition_id = ?, updated_at = datetime(\'now\') WHERE id = ?'
-        ).bind(editionId, matterId).run();
+          'UPDATE matters SET edition_id = $1, updated_at = NOW() WHERE id = $2',
+          [editionId, matterId]
+        );
         
         results.added.push(matterId);
         currentOrder++;
@@ -841,8 +912,8 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
       user.id,
       'edition_matter',
       editionId,
@@ -850,7 +921,7 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
       JSON.stringify({ matter_ids, results }),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({ 
       message: `${results.added.length} matérias adicionadas com sucesso`,
@@ -870,13 +941,20 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
 editions.delete('/:id/remove-matter/:matterId', requireRole('admin', 'semad'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const editionId = parseInt(c.req.param('id'));
     const matterId = parseInt(c.req.param('matterId'));
     
     // Verificar se edição existe e não está publicada
-    const edition = await db.query(
-      'SELECT * FROM editions WHERE id = ?'
-    ).bind(editionId).first();
+    const editionResult = await db.query(
+      'SELECT * FROM editions WHERE id = $1',
+      [editionId]
+    );
+    
+    const edition = editionResult.rows[0];
     
     if (!edition) {
       return c.json({ error: 'Edição não encontrada' }, 404);
@@ -890,13 +968,15 @@ editions.delete('/:id/remove-matter/:matterId', requireRole('admin', 'semad'), a
     
     // Remover matéria da edição
     await db.query(
-      'DELETE FROM edition_matters WHERE edition_id = ? AND matter_id = ?'
-    ).bind(editionId, matterId).run();
+      'DELETE FROM edition_matters WHERE edition_id = $1 AND matter_id = $2',
+      [editionId, matterId]
+    );
     
     // Remover edition_id da matéria
     await db.query(
-      'UPDATE matters SET edition_id = NULL, updated_at = datetime(\'now\') WHERE id = ?'
-    ).bind(matterId).run();
+      'UPDATE matters SET edition_id = NULL, updated_at = NOW() WHERE id = $1',
+      [matterId]
+    );
     
     // Log de auditoria
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -906,8 +986,8 @@ editions.delete('/:id/remove-matter/:matterId', requireRole('admin', 'semad'), a
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
       user.id,
       'edition_matter',
       editionId,
@@ -915,7 +995,7 @@ editions.delete('/:id/remove-matter/:matterId', requireRole('admin', 'semad'), a
       JSON.stringify({ matter_id: matterId }),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({ message: 'Matéria removida da edição com sucesso' });
     
@@ -932,13 +1012,20 @@ editions.delete('/:id/remove-matter/:matterId', requireRole('admin', 'semad'), a
 editions.put('/:id/reorder', requireRole('admin', 'semad'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const editionId = parseInt(c.req.param('id'));
     const { matter_orders } = await c.req.json(); // Array: [{ matter_id, display_order }]
     
     // Verificar se edição existe e não está publicada
-    const edition = await db.query(
-      'SELECT * FROM editions WHERE id = ?'
-    ).bind(editionId).first();
+    const editionResult = await db.query(
+      'SELECT * FROM editions WHERE id = $1',
+      [editionId]
+    );
+    
+    const edition = editionResult.rows[0];
     
     if (!edition) {
       return c.json({ error: 'Edição não encontrada' }, 404);
@@ -954,9 +1041,9 @@ editions.put('/:id/reorder', requireRole('admin', 'semad'), async (c) => {
     for (const order of matter_orders) {
       await db.query(`
         UPDATE edition_matters 
-        SET display_order = ?
-        WHERE edition_id = ? AND matter_id = ?
-      `).bind(order.display_order, editionId, order.matter_id).run();
+        SET display_order = $1
+        WHERE edition_id = $2 AND matter_id = $3
+      `, [order.display_order, editionId, order.matter_id]);
     }
     
     // Log de auditoria
@@ -967,8 +1054,8 @@ editions.put('/:id/reorder', requireRole('admin', 'semad'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
       user.id,
       'edition',
       editionId,
@@ -976,7 +1063,7 @@ editions.put('/:id/reorder', requireRole('admin', 'semad'), async (c) => {
       JSON.stringify({ matter_orders }),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({ message: 'Matérias reordenadas com sucesso' });
     
@@ -993,12 +1080,19 @@ editions.put('/:id/reorder', requireRole('admin', 'semad'), async (c) => {
 editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const id = parseInt(c.req.param('id'));
     
     // Verificar se edição existe
-    const edition = await db.query(
-      'SELECT * FROM editions WHERE id = ?'
-    ).bind(id).first();
+    const editionResult = await db.query(
+      'SELECT * FROM editions WHERE id = $1',
+      [id]
+    );
+    
+    const edition = editionResult.rows[0];
     
     if (!edition) {
       return c.json({ error: 'Edição não encontrada' }, 404);
@@ -1009,26 +1103,31 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
     }
     
     // Verificar se há matérias na edição
-    const matterCount = await db.query(
-      'SELECT COUNT(*) as count FROM edition_matters WHERE edition_id = ?'
-    ).bind(id).first();
+    const matterCountResult = await db.query(
+      'SELECT COUNT(*) as count FROM edition_matters WHERE edition_id = $1',
+      [id]
+    );
     
-    if (!matterCount || matterCount.count === 0) {
+    const matterCount = parseInt(matterCountResult.rows[0]?.count) || 0;
+    
+    if (matterCount === 0) {
       return c.json({ 
         error: 'Não é possível publicar uma edição sem matérias' 
       }, 400);
     }
     
     // Buscar informações do publicador (usuário logado que está publicando)
-    const publisher = await db.query(`
+    const publisherResult = await db.query(`
       SELECT u.name, s.acronym as secretaria_acronym
       FROM users u
       LEFT JOIN secretarias s ON u.secretaria_id = s.id
-      WHERE u.id = ?
-    `).bind(user.id).first();
+      WHERE u.id = $1
+    `, [user.id]);
+    
+    const publisher = publisherResult.rows[0];
     
     // Buscar todas as matérias da edição ordenadas com anexos
-    const { results: matters } = await db.query(`
+    const mattersResult = await db.query(`
       SELECT 
         m.*,
         s.name as secretaria_name,
@@ -1041,62 +1140,70 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
       LEFT JOIN secretarias s ON m.secretaria_id = s.id
       LEFT JOIN users u ON m.author_id = u.id
       LEFT JOIN matter_types mt ON m.matter_type_id = mt.id
-      WHERE em.edition_id = ?
+      WHERE em.edition_id = $1
       ORDER BY em.display_order ASC
-    `).bind(id).all();
+    `, [id]);
+    
+    const matters = mattersResult.rows;
     
     // Buscar anexos de cada matéria
     const mattersWithAttachments = await Promise.all(
-      (matters as any[]).map(async (matter) => {
-        const { results: attachments } = await db.query(`
+      matters.map(async (matter) => {
+        const attachmentsResult = await db.query(`
           SELECT id, filename, file_url, file_size, file_type, original_name
           FROM attachments
-          WHERE matter_id = ?
-        `).bind(matter.id).all();
+          WHERE matter_id = $1
+        `, [matter.id]);
         
         return {
           ...matter,
-          attachments: attachments || []
+          attachments: attachmentsResult.rows || []
         };
       })
     );
     
     // Gerar PDF da edição
-    const pdfResult = await generateEditionPDF(c.env.R2, {
-      edition: edition as any,
-      matters: mattersWithAttachments as any[],
-      publisher: publisher as any
-    }, db.query);
+    const { generateEditionPDF } = await import('../utils/pdf-generator');
+    const pdfResult = await generateEditionPDF({} as any, {
+      edition: edition,
+      matters: mattersWithAttachments,
+      publisher: publisher
+    }, db);
+    
+    // Verificar se pdfResult.htmlContent existe
+    if (!pdfResult.htmlContent) {
+      throw new Error('HTML content não gerado');
+    }
     
     // Atualizar edição com informações do PDF
     await db.query(`
       UPDATE editions 
       SET status = 'published',
-          pdf_url = ?,
-          pdf_hash = ?,
-          total_pages = ?,
-          published_at = datetime('now'),
-          published_by = ?,
-          updated_at = datetime('now')
-      WHERE id = ?
-    `).bind(
+          pdf_url = $1,
+          pdf_hash = $2,
+          total_pages = $3,
+          published_at = NOW(),
+          published_by = $4,
+          updated_at = NOW()
+      WHERE id = $5
+    `, [
       pdfResult.url,
-      pdfResult.hash,
-      pdfResult.totalPages,
+      pdfResult.hash || '',
+      pdfResult.totalPages || 0,
       user.id,
       id
-    ).run();
+    ]);
     
     // Atualizar status de todas as matérias para 'published'
     for (const matter of matters) {
       await db.query(`
         UPDATE matters 
         SET status = 'published',
-            published_at = datetime('now'),
-            pdf_url = ?,
-            updated_at = datetime('now')
-        WHERE id = ?
-      `).bind(pdfResult.url, matter.id).run();
+            published_at = NOW(),
+            pdf_url = $1,
+            updated_at = NOW()
+        WHERE id = $2
+      `, [pdfResult.url, matter.id]);
     }
     
     // Log de auditoria
@@ -1107,21 +1214,21 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
       user.id,
       'edition',
       id,
       'publish',
       JSON.stringify({ 
         pdf_url: pdfResult.url,
-        pdf_hash: pdfResult.hash,
-        total_pages: pdfResult.totalPages,
+        pdf_hash: pdfResult.hash || '',
+        total_pages: pdfResult.totalPages || 0,
         matter_count: matters.length
       }),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({
       message: 'Edição publicada com sucesso',
@@ -1145,12 +1252,19 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
 editions.delete('/:id', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const id = parseInt(c.req.param('id'));
     
     // Verificar se edição existe
-    const edition = await db.query(
-      'SELECT * FROM editions WHERE id = ?'
-    ).bind(id).first();
+    const editionResult = await db.query(
+      'SELECT * FROM editions WHERE id = $1',
+      [id]
+    );
+    
+    const edition = editionResult.rows[0];
     
     if (!edition) {
       return c.json({ error: 'Edição não encontrada' }, 404);
@@ -1165,13 +1279,15 @@ editions.delete('/:id', requireRole('admin'), async (c) => {
     
     // Remover relacionamentos com matérias
     await db.query(
-      'DELETE FROM edition_matters WHERE edition_id = ?'
-    ).bind(id).run();
+      'DELETE FROM edition_matters WHERE edition_id = $1',
+      [id]
+    );
     
     // Deletar edição
     await db.query(
-      'DELETE FROM editions WHERE id = ?'
-    ).bind(id).run();
+      'DELETE FROM editions WHERE id = $1',
+      [id]
+    );
     
     // Log de auditoria
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -1181,8 +1297,8 @@ editions.delete('/:id', requireRole('admin'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
       user.id,
       'edition',
       id,
@@ -1190,7 +1306,7 @@ editions.delete('/:id', requireRole('admin'), async (c) => {
       JSON.stringify(edition),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({ message: 'Edição excluída com sucesso' });
     
@@ -1212,18 +1328,24 @@ editions.post('/:id/auto-build', requireRole('admin', 'semad'), async (c) => {
   try {
     const id = parseInt(c.req.param('id'));
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
     
     // Verificar se edição existe e está em draft
-    const edition = await db.query(
-      'SELECT * FROM editions WHERE id = ? AND status = ?'
-    ).bind(id, 'draft').first();
+    const editionResult = await db.query(
+      'SELECT * FROM editions WHERE id = $1 AND status = $2',
+      [id, 'draft']
+    );
+    
+    const edition = editionResult.rows[0];
     
     if (!edition) {
       return c.json({ error: 'Edição não encontrada ou já publicada' }, 404);
     }
     
     // Buscar todas as matérias aprovadas e ainda não publicadas
-    const { results: matters } = await db.query(`
+    const mattersResult = await db.query(`
       SELECT 
         m.*,
         s.name as secretaria_name,
@@ -1234,10 +1356,12 @@ editions.post('/:id/auto-build', requireRole('admin', 'semad'), async (c) => {
       LEFT JOIN matter_types mt ON m.matter_type_id = mt.id
       WHERE m.status = 'approved'
         AND m.id NOT IN (
-          SELECT matter_id FROM edition_matters WHERE edition_id != ?
+          SELECT matter_id FROM edition_matters WHERE edition_id != $1
         )
       ORDER BY s.name ASC, mt.name ASC, m.title ASC
-    `).bind(id).all();
+    `, [id]);
+    
+    const matters = mattersResult.rows;
     
     if (!matters || matters.length === 0) {
       return c.json({ 
@@ -1248,24 +1372,26 @@ editions.post('/:id/auto-build', requireRole('admin', 'semad'), async (c) => {
     
     // Remover matérias existentes da edição (se houver)
     await db.query(
-      'DELETE FROM edition_matters WHERE edition_id = ?'
-    ).bind(id).run();
+      'DELETE FROM edition_matters WHERE edition_id = $1',
+      [id]
+    );
     
     // Adicionar todas as matérias com display_order sequencial
     let displayOrder = 1;
     for (const matter of matters) {
       await db.query(`
         INSERT INTO edition_matters (edition_id, matter_id, display_order, added_at, added_by)
-        VALUES (?, ?, ?, datetime('now'), ?)
-      `).bind(id, matter.id, displayOrder, user.id).run();
+        VALUES ($1, $2, $3, NOW(), $4)
+      `, [id, matter.id, displayOrder, user.id]);
       
       displayOrder++;
     }
     
     // Atualizar updated_at da edição
     await db.query(
-      'UPDATE editions SET updated_at = datetime(\'now\') WHERE id = ?'
-    ).bind(id).run();
+      'UPDATE editions SET updated_at = NOW() WHERE id = $1',
+      [id]
+    );
     
     // Log de auditoria
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -1275,8 +1401,8 @@ editions.post('/:id/auto-build', requireRole('admin', 'semad'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         new_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
       user.id,
       'edition',
       id,
@@ -1284,7 +1410,7 @@ editions.post('/:id/auto-build', requireRole('admin', 'semad'), async (c) => {
       JSON.stringify({ matters_count: matters.length }),
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
     return c.json({
       message: 'Diário montado automaticamente com sucesso',

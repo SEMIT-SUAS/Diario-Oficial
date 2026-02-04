@@ -6,6 +6,7 @@
 import { Hono } from 'hono';
 import { HonoContext } from '../types';
 import { authMiddleware } from '../middleware/auth';
+import db from '../lib/db'; // Importe a conexão PostgreSQL
 
 const exportRoutes = new Hono<HonoContext>();
 
@@ -66,6 +67,9 @@ function convertToHTMLTable(data: any[], headers: string[]): string {
 exportRoutes.get('/matters/csv', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
     
     // Secretarias veem apenas suas matérias, admin/semad veem todas
     let query = `
@@ -87,17 +91,20 @@ exportRoutes.get('/matters/csv', authMiddleware, async (c) => {
       LEFT JOIN users u ON m.author_id = u.id
     `;
     
+    let params: any[] = [];
+    
     if (user.role === 'secretaria') {
-      query += ` WHERE m.secretaria_id = ?`;
+      query += ` WHERE m.secretaria_id = $1`;
+      params.push(user.secretaria_id);
     }
     
     query += ` ORDER BY m.created_at DESC`;
     
-    const { results } = user.role === 'secretaria'
-      ? await db.query(query).bind(user.secretaria_id).all()
-      : await db.query(query).all();
+    const result = params.length > 0 
+      ? await db.query(query, params)
+      : await db.query(query);
     
-    const csv = convertToCSV(results as any[], [
+    const csv = convertToCSV(result.rows, [
       'id', 'title', 'summary', 'tipo', 'secretaria', 'status', 
       'priority', 'autor', 'data_envio', 'data_publicacao', 'criado_em'
     ]);
@@ -122,6 +129,9 @@ exportRoutes.get('/matters/csv', authMiddleware, async (c) => {
 exportRoutes.get('/matters/xls', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
     
     let query = `
       SELECT 
@@ -142,17 +152,20 @@ exportRoutes.get('/matters/xls', authMiddleware, async (c) => {
       LEFT JOIN users u ON m.author_id = u.id
     `;
     
+    let params: any[] = [];
+    
     if (user.role === 'secretaria') {
-      query += ` WHERE m.secretaria_id = ?`;
+      query += ` WHERE m.secretaria_id = $1`;
+      params.push(user.secretaria_id);
     }
     
     query += ` ORDER BY m.created_at DESC`;
     
-    const { results } = user.role === 'secretaria'
-      ? await db.query(query).bind(user.secretaria_id).all()
-      : await db.query(query).all();
+    const result = params.length > 0 
+      ? await db.query(query, params)
+      : await db.query(query);
     
-    const html = convertToHTMLTable(results as any[], [
+    const html = convertToHTMLTable(result.rows, [
       'id', 'title', 'summary', 'tipo', 'secretaria', 'status', 
       'priority', 'autor', 'data_envio', 'data_publicacao', 'criado_em'
     ]);
@@ -176,7 +189,7 @@ exportRoutes.get('/matters/xls', authMiddleware, async (c) => {
  */
 exportRoutes.get('/editions/csv', authMiddleware, async (c) => {
   try {
-    const { results } = await db.query(`
+    const result = await db.query(`
       SELECT 
         e.id,
         e.edition_number as numero,
@@ -191,11 +204,11 @@ exportRoutes.get('/editions/csv', authMiddleware, async (c) => {
       FROM editions e
       LEFT JOIN edition_matters em ON e.id = em.edition_id
       LEFT JOIN users u ON e.published_by = u.id
-      GROUP BY e.id
+      GROUP BY e.id, u.name
       ORDER BY e.year DESC, e.edition_number DESC
-    `).all();
+    `);
     
-    const csv = convertToCSV(results as any[], [
+    const csv = convertToCSV(result.rows, [
       'id', 'numero', 'data', 'ano', 'status', 'paginas', 
       'total_materias', 'publicado_por', 'publicado_em', 'criado_em'
     ]);
@@ -219,7 +232,7 @@ exportRoutes.get('/editions/csv', authMiddleware, async (c) => {
  */
 exportRoutes.get('/editions/xls', authMiddleware, async (c) => {
   try {
-    const { results } = await db.query(`
+    const result = await db.query(`
       SELECT 
         e.id,
         e.edition_number as numero,
@@ -234,11 +247,11 @@ exportRoutes.get('/editions/xls', authMiddleware, async (c) => {
       FROM editions e
       LEFT JOIN edition_matters em ON e.id = em.edition_id
       LEFT JOIN users u ON e.published_by = u.id
-      GROUP BY e.id
+      GROUP BY e.id, u.name
       ORDER BY e.year DESC, e.edition_number DESC
-    `).all();
+    `);
     
-    const html = convertToHTMLTable(results as any[], [
+    const html = convertToHTMLTable(result.rows, [
       'id', 'numero', 'data', 'ano', 'status', 'paginas', 
       'total_materias', 'publicado_por', 'publicado_em', 'criado_em'
     ]);
@@ -253,6 +266,98 @@ exportRoutes.get('/editions/xls', authMiddleware, async (c) => {
   } catch (error: any) {
     console.error('Error exporting editions to XLS:', error);
     return c.json({ error: 'Erro ao exportar XLS', details: error.message }, 500);
+  }
+});
+
+/**
+ * GET /api/export/users/csv
+ * Exporta usuários em CSV (apenas admin)
+ */
+exportRoutes.get('/users/csv', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    if (!user || user.role !== 'admin') {
+      return c.json({ error: 'Acesso não autorizado' }, 403);
+    }
+    
+    const result = await db.query(`
+      SELECT 
+        u.id,
+        u.name,
+        u.email,
+        u.cpf,
+        u.role,
+        s.name as secretaria,
+        u.active,
+        u.last_login,
+        u.created_at
+      FROM users u
+      LEFT JOIN secretarias s ON u.secretaria_id = s.id
+      ORDER BY u.created_at DESC
+    `);
+    
+    const csv = convertToCSV(result.rows, [
+      'id', 'name', 'email', 'cpf', 'role', 'secretaria', 
+      'active', 'last_login', 'created_at'
+    ]);
+    
+    return new Response(csv, {
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="usuarios_${new Date().toISOString().split('T')[0]}.csv"`
+      }
+    });
+    
+  } catch (error: any) {
+    console.error('Error exporting users to CSV:', error);
+    return c.json({ error: 'Erro ao exportar CSV', details: error.message }, 500);
+  }
+});
+
+/**
+ * GET /api/export/audit-logs/csv
+ * Exporta logs de auditoria em CSV (apenas admin)
+ */
+exportRoutes.get('/audit-logs/csv', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    if (!user || user.role !== 'admin') {
+      return c.json({ error: 'Acesso não autorizado' }, 403);
+    }
+    
+    const result = await db.query(`
+      SELECT 
+        al.id,
+        u.name as usuario,
+        al.entity_type as entidade,
+        al.entity_id as id_entidade,
+        al.action as acao,
+        al.old_values as valores_antigos,
+        al.new_values as valores_novos,
+        al.ip_address as ip,
+        al.user_agent as navegador,
+        al.created_at as data_hora
+      FROM audit_logs al
+      LEFT JOIN users u ON al.user_id = u.id
+      ORDER BY al.created_at DESC
+      LIMIT 1000
+    `);
+    
+    const csv = convertToCSV(result.rows, [
+      'id', 'usuario', 'entidade', 'id_entidade', 'acao',
+      'valores_antigos', 'valores_novos', 'ip', 'navegador', 'data_hora'
+    ]);
+    
+    return new Response(csv, {
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="logs_auditoria_${new Date().toISOString().split('T')[0]}.csv"`
+      }
+    });
+    
+  } catch (error: any) {
+    console.error('Error exporting audit logs to CSV:', error);
+    return c.json({ error: 'Erro ao exportar CSV', details: error.message }, 500);
   }
 });
 

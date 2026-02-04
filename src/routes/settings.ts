@@ -6,6 +6,7 @@
 import { Hono } from 'hono';
 import { HonoContext } from '../types';
 import { authMiddleware, requireRole } from '../middleware/auth';
+import db from '../lib/db'; // Importe a conexão PostgreSQL
 
 const settings = new Hono<HonoContext>();
 
@@ -16,9 +17,11 @@ const settings = new Hono<HonoContext>();
  */
 settings.get('/logo', async (c) => {
   try {
-    const logo = await db.query(
+    const result = await db.query(
       "SELECT value FROM system_settings WHERE key = 'logo_url'"
-    ).first();
+    );
+    
+    const logo = result.rows[0];
     
     if (!logo || !logo.value) {
       // Retornar logo padrão (brasão fornecido)
@@ -27,12 +30,39 @@ settings.get('/logo', async (c) => {
       });
     }
     
-    // O valor já está como data URL string, não precisa de JSON.parse
+    // O valor já está como string, não precisa de JSON.parse
     return c.json({ logo_url: logo.value as string });
     
   } catch (error: any) {
     console.error('Error fetching logo:', error);
     return c.json({ error: 'Erro ao buscar logo', details: error.message }, 500);
+  }
+});
+
+/**
+ * GET /api/settings/favicon
+ * Retorna o favicon atual (público - sem auth)
+ */
+settings.get('/favicon', async (c) => {
+  try {
+    const result = await db.query(
+      "SELECT value FROM system_settings WHERE key = 'favicon_url'"
+    );
+    
+    const favicon = result.rows[0];
+    
+    if (!favicon || !favicon.value) {
+      // Retornar favicon padrão
+      return c.json({ 
+        favicon_url: null
+      });
+    }
+    
+    return c.json({ favicon_url: favicon.value as string });
+    
+  } catch (error: any) {
+    console.error('Error fetching favicon:', error);
+    return c.json({ error: 'Erro ao buscar favicon', details: error.message }, 500);
   }
 });
 
@@ -45,11 +75,24 @@ settings.use('/*', authMiddleware);
  */
 settings.get('/', requireRole('admin'), async (c) => {
   try {
-    const { results } = await db.query(`
+    const result = await db.query(`
       SELECT * FROM system_settings ORDER BY key
-    `).all();
+    `);
     
-    return c.json({ settings: results });
+    // Converter valores de string JSON para objetos quando necessário
+    const settings = result.rows.map(row => {
+      try {
+        // Tenta parsear JSON, se falhar retorna como string
+        return {
+          ...row,
+          value: row.value ? (row.value.startsWith('{') || row.value.startsWith('[') ? JSON.parse(row.value) : row.value) : null
+        };
+      } catch (e) {
+        return row;
+      }
+    });
+    
+    return c.json({ settings });
     
   } catch (error: any) {
     console.error('Error fetching settings:', error);
@@ -65,12 +108,22 @@ settings.get('/:key', requireRole('admin'), async (c) => {
   try {
     const key = c.req.param('key');
     
-    const setting = await db.query(
-      'SELECT * FROM system_settings WHERE key = ?'
-    ).bind(key).first();
+    const result = await db.query(
+      'SELECT * FROM system_settings WHERE key = $1',
+      [key]
+    );
+    
+    const setting = result.rows[0];
     
     if (!setting) {
       return c.json({ error: 'Configuração não encontrada' }, 404);
+    }
+    
+    // Converter valor de JSON se necessário
+    try {
+      setting.value = setting.value ? (setting.value.startsWith('{') || setting.value.startsWith('[') ? JSON.parse(setting.value) : setting.value) : null;
+    } catch (e) {
+      // Manter como string se não for JSON válido
     }
     
     return c.json({ setting });
@@ -88,13 +141,20 @@ settings.get('/:key', requireRole('admin'), async (c) => {
 settings.put('/:key', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const key = c.req.param('key');
     const { value, description } = await c.req.json();
     
     // Verificar se existe
-    const existing = await db.query(
-      'SELECT * FROM system_settings WHERE key = ?'
-    ).bind(key).first();
+    const existingResult = await db.query(
+      'SELECT * FROM system_settings WHERE key = $1',
+      [key]
+    );
+    
+    const existing = existingResult.rows[0];
     
     if (!existing) {
       return c.json({ error: 'Configuração não encontrada' }, 404);
@@ -109,19 +169,24 @@ settings.put('/:key', requireRole('admin'), async (c) => {
       return c.json({ error: 'Valor deve ser numérico' }, 400);
     }
     
+    // Converter valor para string (JSON se for objeto/array)
+    const valueToStore = typeof value === 'object' || Array.isArray(value) 
+      ? JSON.stringify(value) 
+      : String(value);
+    
     await db.query(`
       UPDATE system_settings 
-      SET value = ?,
-          description = ?,
-          updated_at = datetime('now'),
-          updated_by = ?
-      WHERE key = ?
-    `).bind(
-      JSON.stringify(value),
-      description || existing.description,
+      SET value = $1,
+          description = COALESCE($2, description),
+          updated_at = NOW(),
+          updated_by = $3
+      WHERE key = $4
+    `, [
+      valueToStore,
+      description,
       user.id,
       key
-    ).run();
+    ]);
     
     // Audit log
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -131,19 +196,22 @@ settings.put('/:key', requireRole('admin'), async (c) => {
       INSERT INTO audit_logs (
         user_id, entity_type, entity_id, action,
         old_values, new_values, ip_address, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).bind(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+    `, [
       user.id,
       'system_setting',
       key,
       'update',
       existing.value,
-      JSON.stringify(value),
+      valueToStore,
       ipAddress,
       userAgent
-    ).run();
+    ]);
     
-    return c.json({ message: 'Configuração atualizada com sucesso' });
+    return c.json({ 
+      message: 'Configuração atualizada com sucesso',
+      value: value
+    });
     
   } catch (error: any) {
     console.error('Error updating setting:', error);
@@ -158,33 +226,53 @@ settings.put('/:key', requireRole('admin'), async (c) => {
 settings.post('/', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
-    const { key, value, description } = await c.req.json();
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
+    const { key, value, description, value_type = 'string' } = await c.req.json();
     
     if (!key || value === undefined) {
       return c.json({ error: 'Chave e valor são obrigatórios' }, 400);
     }
     
-    // Verificar se já existe
-    const existing = await db.query(
-      'SELECT id FROM system_settings WHERE key = ?'
-    ).bind(key).first();
+    // Validar value_type
+    const validTypes = ['string', 'boolean', 'number', 'json'];
+    if (!validTypes.includes(value_type)) {
+      return c.json({ error: 'Tipo de valor inválido. Use: string, boolean, number, json' }, 400);
+    }
     
-    if (existing) {
+    // Verificar se já existe
+    const existingResult = await db.query(
+      'SELECT id FROM system_settings WHERE key = $1',
+      [key]
+    );
+    
+    if (existingResult.rows.length > 0) {
       return c.json({ error: 'Configuração já existe' }, 400);
     }
     
+    // Converter valor para string (JSON se for objeto/array)
+    const valueToStore = typeof value === 'object' || Array.isArray(value) 
+      ? JSON.stringify(value) 
+      : String(value);
+    
     await db.query(`
       INSERT INTO system_settings (
-        key, value, description, updated_at, updated_by
-      ) VALUES (?, ?, ?, datetime('now'), ?)
-    `).bind(
+        key, value, value_type, description, updated_at, updated_by
+      ) VALUES ($1, $2, $3, $4, NOW(), $5)
+    `, [
       key,
-      JSON.stringify(value),
+      valueToStore,
+      value_type,
       description || null,
       user.id
-    ).run();
+    ]);
     
-    return c.json({ message: 'Configuração criada com sucesso' }, 201);
+    return c.json({ 
+      message: 'Configuração criada com sucesso',
+      key: key
+    }, 201);
     
   } catch (error: any) {
     console.error('Error creating setting:', error);
@@ -199,6 +287,10 @@ settings.post('/', requireRole('admin'), async (c) => {
 settings.post('/logo/upload', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const formData = await c.req.formData();
     const logoFile = formData.get('logo') as File;
     
@@ -207,25 +299,30 @@ settings.post('/logo/upload', requireRole('admin'), async (c) => {
     }
     
     // Validar tipo de arquivo
-    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml'];
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml', 'image/gif'];
     if (!allowedTypes.includes(logoFile.type)) {
-      return c.json({ error: 'Tipo de arquivo inválido. Use PNG, JPG ou SVG' }, 400);
+      return c.json({ error: 'Tipo de arquivo inválido. Use PNG, JPG, GIF ou SVG' }, 400);
+    }
+    
+    // Validar tamanho (máximo 2MB)
+    if (logoFile.size > 2 * 1024 * 1024) {
+      return c.json({ error: 'Arquivo muito grande. Tamanho máximo: 2MB' }, 400);
     }
     
     // Converter para base64
     const arrayBuffer = await logoFile.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
     const dataUrl = `data:${logoFile.type};base64,${base64}`;
     
-    // Salvar nas configurações
+    // Salvar nas configurações usando UPSERT
     await db.query(`
-      INSERT INTO system_settings (key, value, description, updated_at, updated_by)
-      VALUES ('logo_url', ?, 'Logo da Prefeitura (Base64)', datetime('now'), ?)
+      INSERT INTO system_settings (key, value, value_type, description, updated_at, updated_by)
+      VALUES ($1, $2, 'string', 'Logo da Prefeitura (Base64)', NOW(), $3)
       ON CONFLICT(key) DO UPDATE SET
-        value = excluded.value,
-        updated_at = datetime('now'),
-        updated_by = excluded.updated_by
-    `).bind(dataUrl, user.id).run();
+        value = EXCLUDED.value,
+        updated_at = NOW(),
+        updated_by = EXCLUDED.updated_by
+    `, ['logo_url', dataUrl, user.id]);
     
     return c.json({ 
       message: 'Logo enviada com sucesso',
@@ -239,12 +336,71 @@ settings.post('/logo/upload', requireRole('admin'), async (c) => {
 });
 
 /**
+ * POST /api/settings/favicon/upload
+ * Upload do favicon da prefeitura
+ */
+settings.post('/favicon/upload', requireRole('admin'), async (c) => {
+  try {
+    const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
+    const formData = await c.req.formData();
+    const faviconFile = formData.get('favicon') as File;
+    
+    if (!faviconFile) {
+      return c.json({ error: 'Arquivo de favicon não fornecido' }, 400);
+    }
+    
+    // Validar tipo de arquivo (favicon geralmente é .ico, mas pode ser PNG)
+    const allowedTypes = ['image/x-icon', 'image/vnd.microsoft.icon', 'image/png', 'image/svg+xml'];
+    if (!allowedTypes.includes(faviconFile.type)) {
+      return c.json({ error: 'Tipo de arquivo inválido. Use ICO, PNG ou SVG' }, 400);
+    }
+    
+    // Validar tamanho (máximo 100KB para favicon)
+    if (faviconFile.size > 100 * 1024) {
+      return c.json({ error: 'Arquivo muito grande. Tamanho máximo: 100KB' }, 400);
+    }
+    
+    // Converter para base64
+    const arrayBuffer = await faviconFile.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+    const dataUrl = `data:${faviconFile.type};base64,${base64}`;
+    
+    // Salvar nas configurações usando UPSERT
+    await db.query(`
+      INSERT INTO system_settings (key, value, value_type, description, updated_at, updated_by)
+      VALUES ($1, $2, 'string', 'Favicon da Prefeitura (Base64)', NOW(), $3)
+      ON CONFLICT(key) DO UPDATE SET
+        value = EXCLUDED.value,
+        updated_at = NOW(),
+        updated_by = EXCLUDED.updated_by
+    `, ['favicon_url', dataUrl, user.id]);
+    
+    return c.json({ 
+      message: 'Favicon enviado com sucesso',
+      favicon_url: dataUrl.substring(0, 100) + '...'
+    });
+    
+  } catch (error: any) {
+    console.error('Error uploading favicon:', error);
+    return c.json({ error: 'Erro ao enviar favicon', details: error.message }, 500);
+  }
+});
+
+/**
  * POST /api/settings/bulk
  * Atualiza múltiplas configurações de uma vez
  */
 settings.post('/bulk', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
     const { settings: settingsToUpdate } = await c.req.json();
     
     if (!Array.isArray(settingsToUpdate) || settingsToUpdate.length === 0) {
@@ -253,7 +409,7 @@ settings.post('/bulk', requireRole('admin'), async (c) => {
     
     // Atualizar cada configuração
     let updated = 0;
-    let errors = [];
+    let errors: { key: string; error: string }[] = [];
     
     for (const setting of settingsToUpdate) {
       const { key, value } = setting;
@@ -264,37 +420,22 @@ settings.post('/bulk', requireRole('admin'), async (c) => {
       }
       
       try {
-        // Verificar se existe
-        const existing = await db.query(
-          'SELECT * FROM system_settings WHERE key = ?'
-        ).bind(key).first();
+        // Converter valor para string (JSON se for objeto/array)
+        const valueToStore = typeof value === 'object' || Array.isArray(value) 
+          ? JSON.stringify(value) 
+          : String(value);
         
-        if (existing) {
-          // Atualizar existente
-          await db.query(`
-            UPDATE system_settings 
-            SET value = ?,
-                updated_at = datetime('now'),
-                updated_by = ?
-            WHERE key = ?
-          `).bind(
-            JSON.stringify(value),
-            user.id,
-            key
-          ).run();
-          updated++;
-        } else {
-          // Criar novo se não existe
-          await db.query(`
-            INSERT INTO system_settings (key, value, updated_at, updated_by)
-            VALUES (?, ?, datetime('now'), ?)
-          `).bind(
-            key,
-            JSON.stringify(value),
-            user.id
-          ).run();
-          updated++;
-        }
+        // Usar UPSERT (INSERT ... ON CONFLICT ...)
+        await db.query(`
+          INSERT INTO system_settings (key, value, updated_at, updated_by)
+          VALUES ($1, $2, NOW(), $3)
+          ON CONFLICT(key) DO UPDATE SET
+            value = EXCLUDED.value,
+            updated_at = NOW(),
+            updated_by = EXCLUDED.updated_by
+        `, [key, valueToStore, user.id]);
+        
+        updated++;
       } catch (err: any) {
         errors.push({ key, error: err.message });
       }
@@ -309,6 +450,66 @@ settings.post('/bulk', requireRole('admin'), async (c) => {
   } catch (error: any) {
     console.error('Error bulk updating settings:', error);
     return c.json({ error: 'Erro ao atualizar configurações', details: error.message }, 500);
+  }
+});
+
+/**
+ * DELETE /api/settings/:key
+ * Remove uma configuração
+ */
+settings.delete('/:key', requireRole('admin'), async (c) => {
+  try {
+    const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Usuário não autenticado' }, 401);
+    }
+    
+    const key = c.req.param('key');
+    
+    // Verificar se existe
+    const existingResult = await db.query(
+      'SELECT * FROM system_settings WHERE key = $1',
+      [key]
+    );
+    
+    const existing = existingResult.rows[0];
+    
+    if (!existing) {
+      return c.json({ error: 'Configuração não encontrada' }, 404);
+    }
+    
+    // Verificar se é uma configuração protegida
+    const protectedSettings = ['logo_url', 'favicon_url', 'system_name', 'system_version'];
+    if (protectedSettings.includes(key)) {
+      return c.json({ error: 'Esta configuração não pode ser removida' }, 400);
+    }
+    
+    await db.query('DELETE FROM system_settings WHERE key = $1', [key]);
+    
+    // Audit log
+    const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
+    const userAgent = c.req.header('user-agent') || 'unknown';
+    
+    await db.query(`
+      INSERT INTO audit_logs (
+        user_id, entity_type, entity_id, action,
+        old_values, ip_address, user_agent, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    `, [
+      user.id,
+      'system_setting',
+      key,
+      'delete',
+      existing.value,
+      ipAddress,
+      userAgent
+    ]);
+    
+    return c.json({ message: 'Configuração removida com sucesso' });
+    
+  } catch (error: any) {
+    console.error('Error deleting setting:', error);
+    return c.json({ error: 'Erro ao remover configuração', details: error.message }, 500);
   }
 });
 
