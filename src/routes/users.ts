@@ -51,8 +51,8 @@ users.get('/stats', async (c) => {
         COUNT(CASE WHEN active = false THEN 1 END) as inactive_users,
         COUNT(CASE WHEN role = 'admin' THEN 1 END) as admins,
         COUNT(CASE WHEN role = 'semad' THEN 1 END) as semad_users,
-        COUNT(CASE WHEN role = 'secretaria' THEN 1 END) as secretaria_users,
-        COUNT(CASE WHEN role = 'publico' THEN 1 END) as publico_users,
+        COUNT(CASE WHEN role = 'author' THEN 1 END) as author_users,
+        COUNT(CASE WHEN role = 'publisher' THEN 1 END) as publisher_users,
         COUNT(CASE WHEN last_login >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as active_last_month
       FROM users
     `);
@@ -101,7 +101,6 @@ users.get('/:id', async (c) => {
  * POST /api/users
  * Cria um novo usuário
  */
-// POST /api/users
 users.post('/', async (c) => {
   try {
     const admin = c.get('user');
@@ -118,32 +117,60 @@ users.post('/', async (c) => {
       }, 400);
     }
     
-    // Validar role
-    const validRoles = ['admin', 'semad', 'secretaria', 'publico'];
-    if (!validRoles.includes(role)) {
-      return c.json({ error: 'Role inválida' }, 400);
+    // 🔍 CORREÇÃO CRÍTICA: Verificar os valores permitidos na constraint
+    // Primeiro, vamos descobrir quais roles são permitidas
+    try {
+      const checkResult = await db.query(`
+        SELECT pg_get_constraintdef(oid) as constraint_def
+        FROM pg_constraint 
+        WHERE conname = 'users_role_check' 
+        AND conrelid = 'users'::regclass
+      `);
+      
+      console.log('Constraint users_role_check:', checkResult.rows[0]?.constraint_def);
+    } catch (err) {
+      // Ignora erro de consulta
     }
     
-    // 🔍 CORREÇÃO: Validar secretaria_id baseado no role
-    if (role === 'secretaria' && (!secretaria_id || secretaria_id === '')) {
+    // Com base no seu sistema atual, vou assumir estas roles:
+    const validRoles = ['admin', 'semad', 'author', 'publisher'];
+    
+    // 🔍 CORREÇÃO: Mapear o que o frontend envia para o que o banco aceita
+    const roleMapping: Record<string, string> = {
+      'admin': 'admin',
+      'semad': 'semad',
+      'secretaria': 'author',       // Mapear 'secretaria' para 'author'
+      'publico': 'publisher'        // Mapear 'publico' para 'publisher'
+    };
+    
+    // Usar mapeamento ou usar direto se já estiver correto
+    const dbRole = roleMapping[role] || role;
+    
+    if (!validRoles.includes(dbRole)) {
       return c.json({ 
-        error: 'Secretaria é obrigatória para usuários do tipo "Secretaria"' 
+        error: `Role inválida. Use: ${validRoles.join(', ')}. Recebido: ${role} (mapeado para: ${dbRole})` 
       }, 400);
     }
     
-    // 🔍 CORREÇÃO CRÍTICA: Converter secretaria_id corretamente
+    // 🔍 CORREÇÃO: Validar secretaria_id baseado no role
+    if (dbRole === 'author' && (!secretaria_id || secretaria_id === '')) {
+      return c.json({ 
+        error: 'Secretaria é obrigatória para usuários do tipo "Autor (Secretaria)"' 
+      }, 400);
+    }
+    
+    // Converter secretaria_id corretamente
     let finalSecretariaId: number | null = null;
     
     if (secretaria_id && secretaria_id !== '') {
-      // Converter para número se fornecido
       const parsedId = parseInt(String(secretaria_id));
       if (!isNaN(parsedId)) {
         finalSecretariaId = parsedId;
       }
     }
     
-    // Para usuários não-secretaria, garantir que seja null
-    if (role !== 'secretaria') {
+    // Para usuários não-author, garantir que seja null
+    if (dbRole !== 'author') {
       finalSecretariaId = null;
     }
     
@@ -160,12 +187,11 @@ users.post('/', async (c) => {
     // Hash da senha
     const passwordHash = await hashPassword(password);
     
-    // 🔍 CORREÇÃO: Log dos valores que serão inseridos
     console.log('Valores para INSERT:', {
-      name, email, cpf: cpf || null, role, secretaria_id: finalSecretariaId
+      name, email, role, dbRole, secretaria_id: finalSecretariaId
     });
     
-    // Criar usuário - CORREÇÃO NO PARÂMETRO $6
+    // Criar usuário
     const result = await db.query(`
       INSERT INTO users (
         name, email, cpf, password_hash, role, secretaria_id, 
@@ -177,8 +203,8 @@ users.post('/', async (c) => {
       email, 
       cpf || null, 
       passwordHash, 
-      role, 
-      finalSecretariaId  // Agora pode ser number ou null
+      dbRole,  // Usar role mapeada
+      finalSecretariaId
     ]);
     
     const newUser = result.rows[0];
@@ -197,7 +223,10 @@ users.post('/', async (c) => {
       'user',
       newUser.id,
       'create',
-      JSON.stringify({ name, email, role, secretaria_id: finalSecretariaId }),
+      JSON.stringify({ 
+        name, email, role: dbRole, // Registrar role mapeada
+        secretaria_id: finalSecretariaId 
+      }),
       ipAddress,
       userAgent
     ]);
@@ -213,17 +242,37 @@ users.post('/', async (c) => {
       message: error.message,
       code: error.code,
       detail: error.detail,
-      hint: error.hint,
-      position: error.position
+      hint: error.hint
     });
     
-    // Adicionar mais detalhes específicos
+    if (error.code === '23514') { // Violação de constraint de verificação
+      // Tentar descobrir quais roles são permitidas
+      try {
+        const result = await db.query(`
+          SELECT DISTINCT role FROM users ORDER BY role
+        `);
+        const allowedRoles = result.rows.map((r: any) => r.role);
+        
+        return c.json({ 
+          error: 'Role inválida para este banco de dados',
+          details: `Roles permitidas: ${allowedRoles.join(', ')}`,
+        }, 400);
+      } catch (queryError) {
+        return c.json({ 
+          error: 'Role inválida. O valor enviado não é aceito pelo banco de dados.',
+          details: error.message,
+          hint: 'Verifique os valores permitidos na coluna "role" da tabela "users"'
+        }, 400);
+      }
+    }
+    
     if (error.code === '23503') { // Violação de chave estrangeira
       return c.json({ 
         error: 'Erro de referência: A secretaria selecionada não existe',
         details: error.message 
       }, 400);
     }
+    
     if (error.code === '23505') { // Violação de unicidade
       return c.json({ 
         error: 'Email já cadastrado no sistema',
@@ -234,8 +283,7 @@ users.post('/', async (c) => {
     return c.json({ 
       error: 'Erro ao criar usuário', 
       details: error.message,
-      code: error.code,
-      hint: error.hint
+      code: error.code
     }, 500);
   }
 });
@@ -255,10 +303,9 @@ users.put('/:id', async (c) => {
     const bodyData = await c.req.json();
     let { name, email, cpf, role, secretaria_id, active } = bodyData;
     
-    // DEBUG: Log dos dados recebidos
     console.log('PUT /api/users/:id - Dados recebidos:', JSON.stringify(bodyData));
     
-    // Verificar se usuário existe e pegar valores atuais
+    // Verificar se usuário existe
     const userResult = await db.query(
       'SELECT * FROM users WHERE id = $1',
       [id]
@@ -270,22 +317,31 @@ users.put('/:id', async (c) => {
       return c.json({ error: 'Usuário não encontrado' }, 404);
     }
     
-    // Se campos não foram enviados, usar valores atuais do banco
+    // Se campos não foram enviados, usar valores atuais
     name = name || user.name;
     email = email || user.email;
     role = role || user.role;
     
-    // Validação mínima - só email é realmente obrigatório
     if (!email) {
       return c.json({ error: 'Email é obrigatório' }, 400);
     }
     
-    // Validar role se for fornecida
-    if (role) {
-      const validRoles = ['admin', 'semad', 'secretaria', 'publico'];
-      if (!validRoles.includes(role)) {
-        return c.json({ error: 'Role inválida' }, 400);
-      }
+    // 🔍 CORREÇÃO: Mapear role para valor do banco
+    const roleMapping: Record<string, string> = {
+      'admin': 'admin',
+      'semad': 'semad',
+      'secretaria': 'author',
+      'publico': 'publisher'
+    };
+    
+    const dbRole = roleMapping[role] || role;
+    
+    // Validar role
+    const validRoles = ['admin', 'semad', 'author', 'publisher'];
+    if (!validRoles.includes(dbRole)) {
+      return c.json({ 
+        error: `Role inválida. Use: ${validRoles.join(', ')}` 
+      }, 400);
     }
     
     // Não permitir que usuário desative a si mesmo
@@ -294,24 +350,31 @@ users.put('/:id', async (c) => {
     }
     
     // Não permitir que usuário altere sua própria role para não-admin
-    if (id === admin.id && role !== 'admin') {
+    if (id === admin.id && dbRole !== 'admin') {
       return c.json({ error: 'Não é possível alterar sua própria role' }, 400);
     }
     
-    // Garantir que secretaria_id seja null se não fornecido ou vazio
-    const finalSecretariaId = (secretaria_id !== undefined && secretaria_id !== null && secretaria_id !== '') 
+    // Validar secretaria_id para authors
+    let finalSecretariaId = (secretaria_id !== undefined && secretaria_id !== null && secretaria_id !== '') 
       ? parseInt(String(secretaria_id)) 
       : null;
     
-    // Garantir que active seja boolean - se não fornecido, manter valor atual
+    if (dbRole === 'author' && !finalSecretariaId) {
+      // Se for author, manter secretaria_id atual se não fornecido
+      if (secretaria_id === undefined || secretaria_id === null || secretaria_id === '') {
+        finalSecretariaId = user.secretaria_id;
+      }
+    } else if (dbRole !== 'author') {
+      // Para não-authors, sempre null
+      finalSecretariaId = null;
+    }
+    
     const finalActive = (active !== undefined) 
       ? Boolean(active)
       : user.active;
     
     console.log('PUT /api/users/:id - Valores finais:', {
-      name, email, cpf: cpf || null, role, 
-      secretaria_id: finalSecretariaId, 
-      active: finalActive
+      name, email, role, dbRole, secretaria_id: finalSecretariaId, active: finalActive
     });
     
     // Atualizar usuário
@@ -324,7 +387,7 @@ users.put('/:id', async (c) => {
       name, 
       email, 
       cpf || null, 
-      role, 
+      dbRole,  // Usar role mapeada
       finalSecretariaId, 
       finalActive ? 1 : 0, 
       id
@@ -345,7 +408,7 @@ users.put('/:id', async (c) => {
       id,
       'update',
       JSON.stringify(user),
-      JSON.stringify({ name, email, cpf, role, secretaria_id, active }),
+      JSON.stringify({ name, email, cpf, role: dbRole, secretaria_id, active }), // Usar dbRole
       ipAddress,
       userAgent
     ]);
@@ -354,6 +417,14 @@ users.put('/:id', async (c) => {
     
   } catch (error: any) {
     console.error('Error updating user:', error);
+    
+    if (error.code === '23514') { // Violação de constraint de verificação
+      return c.json({ 
+        error: 'Role inválida para atualização',
+        details: 'O valor de role não é aceito pelo banco de dados'
+      }, 400);
+    }
+    
     return c.json({ error: 'Erro ao atualizar usuário', details: error.message }, 500);
   }
 });
@@ -441,7 +512,15 @@ users.post('/import', async (c) => {
       return c.json({ error: 'Array de usuários é obrigatório' }, 400);
     }
     
-    const validRoles = ['admin', 'semad', 'secretaria', 'publico'];
+    // 🔍 CORREÇÃO: Roles mapeadas para o banco
+    const roleMapping: Record<string, string> = {
+      'admin': 'admin',
+      'semad': 'semad',
+      'secretaria': 'author',
+      'publico': 'publisher'
+    };
+    
+    const validDbRoles = ['admin', 'semad', 'author', 'publisher'];
     const results = {
       created: [] as any[],
       skipped: [] as { email: string; reason: string }[],
@@ -458,8 +537,10 @@ users.post('/import', async (c) => {
           continue;
         }
         
-        if (!validRoles.includes(role)) {
-          results.skipped.push({ email, reason: 'Role inválida' });
+        // Mapear role
+        const dbRole = roleMapping[role] || role;
+        if (!validDbRoles.includes(dbRole)) {
+          results.skipped.push({ email, reason: `Role inválida: ${role} (mapeado para: ${dbRole})` });
           continue;
         }
         
@@ -472,6 +553,18 @@ users.post('/import', async (c) => {
         if (existingResult.rows.length > 0) {
           results.skipped.push({ email, reason: 'Email já cadastrado' });
           continue;
+        }
+        
+        // Validar secretaria para authors
+        let finalSecretariaId = null;
+        if (dbRole === 'author') {
+          if (secretaria_id && secretaria_id !== '') {
+            finalSecretariaId = parseInt(String(secretaria_id));
+          }
+          if (!finalSecretariaId) {
+            results.skipped.push({ email, reason: 'Secretaria obrigatória para autores' });
+            continue;
+          }
         }
         
         // Gerar senha aleatória se não fornecida
@@ -490,14 +583,14 @@ users.post('/import', async (c) => {
           email, 
           cpf || null, 
           passwordHash, 
-          role, 
-          secretaria_id || null
+          dbRole,  // Usar role mapeada
+          finalSecretariaId
         ]);
         
         const newUser = result.rows[0];
         results.created.push({
           ...newUser,
-          password_generated: !password // Flag se senha foi gerada
+          password_generated: !password
         });
         
       } catch (error: any) {
@@ -606,7 +699,7 @@ users.delete('/:id', async (c) => {
       });
     }
     
-    // Hard delete - remove completamente (apenas se não tiver matérias)
+    // Hard delete - remove completamente
     await db.query('DELETE FROM users WHERE id = $1', [id]);
     
     // Log de auditoria

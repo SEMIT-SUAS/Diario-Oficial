@@ -14,6 +14,41 @@ const holidays = new Hono<HonoContext>();
 holidays.use('/*', authMiddleware);
 
 /**
+ * Função para formatar data para yyyy-MM-dd (formato do input date)
+ */
+function formatDateForDisplay(dateString: string): string {
+  try {
+    // Se já estiver no formato yyyy-MM-dd, retorna como está
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+      return dateString;
+    }
+    
+    // Converte qualquer formato para yyyy-MM-dd
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) {
+      console.error('Invalid date:', dateString);
+      return dateString;
+    }
+    
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    
+    return `${year}-${month}-${day}`;
+  } catch (error) {
+    console.error('Error formatting date for display:', error, 'dateString:', dateString);
+    return dateString;
+  }
+}
+
+/**
+ * Função para converter data para formato yyyy-MM-dd para o banco
+ */
+function formatDateForDB(dateString: string): string {
+  return formatDateForDisplay(dateString); // Mesma função, mesmo formato
+}
+
+/**
  * GET /api/holidays
  * Lista todos os feriados (com filtro opcional por ano)
  */
@@ -46,8 +81,10 @@ holidays.get('/', async (c) => {
     
     const mappedResults = result.rows.map((h: any) => ({
       ...h,
+      date: formatDateForDisplay(h.date), // Garantir formato correto para frontend
       type: reverseTypeMap[h.type] || h.type,
-      is_recurring: h.recurring // Adicionar alias para frontend
+      is_recurring: h.recurring,
+      is_active: h.active
     }));
     
     return c.json({ holidays: mappedResults });
@@ -87,8 +124,10 @@ holidays.get('/:id', async (c) => {
     
     const mappedHoliday = {
       ...holiday,
+      date: formatDateForDisplay(holiday.date), // Garantir formato correto
       type: reverseTypeMap[holiday.type] || holiday.type,
-      is_recurring: holiday.recurring
+      is_recurring: holiday.recurring,
+      is_active: holiday.active
     };
     
     return c.json({ holiday: mappedHoliday });
@@ -116,6 +155,18 @@ holidays.post('/', requireRole('admin'), async (c) => {
       return c.json({ error: 'Data, nome e tipo são obrigatórios' }, 400);
     }
     
+    // Converter data para formato yyyy-MM-dd
+    const formattedDate = formatDateForDB(date);
+    
+    // Validar formato da data
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(formattedDate)) {
+      return c.json({ 
+        error: 'Formato de data inválido. Use yyyy-MM-dd',
+        received: date,
+        formatted: formattedDate 
+      }, 400);
+    }
+    
     // Mapear tipo do frontend (inglês) para banco (português)
     const typeMap: Record<string, string> = {
       'national': 'nacional',
@@ -134,27 +185,28 @@ holidays.post('/', requireRole('admin'), async (c) => {
     // Verificar se já existe feriado nesta data
     const existingResult = await db.query(
       'SELECT id FROM holidays WHERE date = $1',
-      [date]
+      [formattedDate]
     );
     
     if (existingResult.rows.length > 0) {
       return c.json({ error: 'Já existe um feriado cadastrado nesta data' }, 400);
     }
     
-    // Extrair ano da data
-    const year = new Date(date + 'T00:00:00').getFullYear();
+    // Criar descrição padrão baseada no nome do feriado
+    const holidayDescription = `${name} - Feriado ${dbType}`;
     
+    // Inserir com data formatada
     const result = await db.query(`
       INSERT INTO holidays (
-        date, name, type, recurring, year, active, created_at, created_by
-      ) VALUES ($1, $2, $3, $4, $5, true, NOW(), $6)
+        date, name, description, type, recurring, active, created_at, created_by
+      ) VALUES ($1, $2, $3, $4, $5, 1, NOW(), $6)
       RETURNING id
     `, [
-      date,
+      formattedDate,  // Data formatada para yyyy-MM-dd
       name,
-      dbType,  // Usar valor mapeado para português
+      holidayDescription,
+      dbType,
       is_recurring ? 1 : 0,
-      year,
       user.id
     ]);
     
@@ -174,19 +226,30 @@ holidays.post('/', requireRole('admin'), async (c) => {
       'holiday',
       holidayId,
       'create',
-      JSON.stringify({ date, name, type, is_recurring }),
+      JSON.stringify({ 
+        date: formattedDate, 
+        name, 
+        type, 
+        is_recurring, 
+        description: holidayDescription 
+      }),
       ipAddress,
       userAgent
     ]);
     
     return c.json({ 
       message: 'Feriado criado com sucesso',
-      id: holidayId
+      id: holidayId,
+      date: formattedDate  // Retornar data formatada para o frontend
     }, 201);
     
   } catch (error: any) {
     console.error('Error creating holiday:', error);
-    return c.json({ error: 'Erro ao criar feriado', details: error.message }, 500);
+    return c.json({ 
+      error: 'Erro ao criar feriado', 
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    }, 500);
   }
 });
 
@@ -216,6 +279,21 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
       return c.json({ error: 'Feriado não encontrado' }, 404);
     }
     
+    // Converter data para formato yyyy-MM-dd se for fornecida
+    let formattedDate = formatDateForDisplay(existing.date); // Usar formato atual
+    if (date) {
+      formattedDate = formatDateForDB(date);
+      
+      // Validar formato da data
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(formattedDate)) {
+        return c.json({ 
+          error: 'Formato de data inválido. Use yyyy-MM-dd',
+          received: date,
+          formatted: formattedDate 
+        }, 400);
+      }
+    }
+    
     // Mapear tipo do frontend (inglês) para banco (português)
     const typeMap: Record<string, string> = {
       'national': 'nacional',
@@ -234,11 +312,11 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
     
     const dbType = type ? (typeMap[type] || type) : existing.type;
     
-    // Verificar conflito de data
-    if (date && date !== existing.date) {
+    // Verificar conflito de data (só se a data mudou)
+    if (date && formattedDate !== existing.date) {
       const dateConflictResult = await db.query(
         'SELECT id FROM holidays WHERE date = $1 AND id != $2',
-        [date, id]
+        [formattedDate, id]
       );
       
       if (dateConflictResult.rows.length > 0) {
@@ -246,26 +324,30 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
       }
     }
     
-    // Calcular novo ano se data mudar
-    const finalDate = date || existing.date;
-    const year = new Date(finalDate + 'T00:00:00').getFullYear();
-    
+    // Atualizar com data formatada
     await db.query(`
       UPDATE holidays 
       SET date = $1,
           name = $2,
           type = $3,
           recurring = $4,
-          year = $5
-      WHERE id = $6
+          updated_at = NOW()
+      WHERE id = $5
     `, [
-      finalDate,
+      formattedDate,
       name || existing.name,
-      dbType,  // Usar valor mapeado
+      dbType,
       is_recurring !== undefined ? (is_recurring ? 1 : 0) : existing.recurring,
-      year,
       id
     ]);
+    
+    // Buscar o feriado atualizado para retornar
+    const updatedResult = await db.query(
+      'SELECT * FROM holidays WHERE id = $1',
+      [id]
+    );
+    
+    const updatedHoliday = updatedResult.rows[0];
     
     // Audit log
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -282,16 +364,39 @@ holidays.put('/:id', requireRole('admin'), async (c) => {
       id,
       'update',
       JSON.stringify(existing),
-      JSON.stringify({ date, name, type, is_recurring }),
+      JSON.stringify({ date: formattedDate, name, type, is_recurring }),
       ipAddress,
       userAgent
     ]);
     
-    return c.json({ message: 'Feriado atualizado com sucesso' });
+    // Mapear tipo para frontend
+    const reverseTypeMap: Record<string, string> = {
+      'nacional': 'national',
+      'estadual': 'state',
+      'municipal': 'municipal',
+      'ponto_facultativo': 'optional'
+    };
+    
+    const responseHoliday = {
+      ...updatedHoliday,
+      date: formatDateForDisplay(updatedHoliday.date), // Garantir formato correto
+      type: reverseTypeMap[updatedHoliday.type] || updatedHoliday.type,
+      is_recurring: updatedHoliday.recurring,
+      is_active: updatedHoliday.active
+    };
+    
+    return c.json({ 
+      message: 'Feriado atualizado com sucesso',
+      holiday: responseHoliday
+    });
     
   } catch (error: any) {
     console.error('Error updating holiday:', error);
-    return c.json({ error: 'Erro ao atualizar feriado', details: error.message }, 500);
+    return c.json({ 
+      error: 'Erro ao atualizar feriado', 
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    }, 500);
   }
 });
 
@@ -384,7 +489,7 @@ holidays.post('/generate-year', requireRole('admin'), async (c) => {
         const month = originalDate.getMonth() + 1; // Mês 0-indexed
         const day = originalDate.getDate();
         
-        // Criar nova data para o ano especificado
+        // Criar nova data para o ano especificado (já no formato yyyy-MM-dd)
         const newDate = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
         
         // Verificar se já existe
@@ -401,13 +506,13 @@ holidays.post('/generate-year', requireRole('admin'), async (c) => {
         // Criar novo feriado
         await db.query(`
           INSERT INTO holidays (
-            date, name, type, recurring, year, active, created_at, created_by
-          ) VALUES ($1, $2, $3, 0, $4, true, NOW(), $5)
+            date, name, description, type, recurring, active, created_at, created_by
+          ) VALUES ($1, $2, $3, $4, 0, 1, NOW(), $5)
         `, [
           newDate,
           holiday.name,
+          holiday.description || `${holiday.name} - Feriado ${holiday.type}`,
           holiday.type,
-          year,
           user.id
         ]);
         

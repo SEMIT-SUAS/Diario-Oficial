@@ -61,11 +61,11 @@ editions.get('/:id/pdf', async (c) => {
     
     const matters = mattersResult.rows;
     
-    // Buscar anexos de cada matéria - CORREÇÃO: usar mime_type em vez de file_type
+    // Buscar anexos de cada matéria - CORREÇÃO: remover original_name
     const mattersWithAttachments = await Promise.all(
       matters.map(async (matter) => {
         const attachmentsResult = await db.query(`
-          SELECT id, filename, file_url, file_size, mime_type, original_name
+          SELECT id, filename, file_url, file_size, mime_type
           FROM attachments
           WHERE matter_id = $1
         `, [matter.id]);
@@ -170,11 +170,11 @@ editions.get('/:id/preview', async (c) => {
     
     const matters = mattersResult.rows;
     
-    // Buscar anexos - CORREÇÃO: usar mime_type em vez de file_type
+    // Buscar anexos - CORREÇÃO: remover original_name
     const mattersWithAttachments = await Promise.all(
       matters.map(async (matter) => {
         const attachmentsResult = await db.query(`
-          SELECT id, filename, file_url, file_size, mime_type, original_name
+          SELECT id, filename, file_url, file_size, mime_type
           FROM attachments
           WHERE matter_id = $1
         `, [matter.id]);
@@ -1168,11 +1168,11 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
     
     const matters = mattersResult.rows;
     
-    // Buscar anexos de cada matéria - CORREÇÃO: usar mime_type em vez de file_type
+    // Buscar anexos de cada matéria - CORREÇÃO: remover original_name
     const mattersWithAttachments = await Promise.all(
       matters.map(async (matter) => {
         const attachmentsResult = await db.query(`
-          SELECT id, filename, file_url, file_size, mime_type, original_name
+          SELECT id, filename, file_url, file_size, mime_type
           FROM attachments
           WHERE matter_id = $1
         `, [matter.id]);

@@ -1,18 +1,7 @@
 // ====================================
 // DOM - PDF Generator Utility
-// Geração de PDFs do Diário Oficial
+// Geração de PDFs do Diário Oficial - Versão PostgreSQL
 // ====================================
-
-/**
- * IMPORTANTE: Cloudflare Workers não suporta bibliotecas Node.js tradicionais de PDF
- * como PDFKit ou jsPDF (que usam Buffer e outras APIs Node.js).
- * 
- * Estratégia para geração de PDF em Cloudflare Workers:
- * 1. Gerar HTML bem formatado com CSS print-friendly
- * 2. Usar serviço externo de conversão HTML→PDF (ex: Gotenberg, Puppeteer Cloud)
- * 3. OU usar API do Cloudflare Browser Rendering (quando disponível)
- * 4. Por ora, vamos gerar um HTML estruturado que pode ser convertido posteriormente
- */
 
 import { generateHash } from './auth';
 
@@ -25,6 +14,7 @@ interface EditionData {
     is_supplemental?: number;
     parent_edition_id?: number;
     parent_edition_number?: string;
+    status?: string;
   };
   matters: Array<{
     id: number;
@@ -45,8 +35,7 @@ interface EditionData {
       filename: string;
       file_url: string;
       file_size?: number;
-      file_type?: string;
-      original_name?: string;
+      mime_type?: string;
     }>;
   }>;
   publisher?: {
@@ -56,723 +45,10 @@ interface EditionData {
 }
 
 interface PDFResult {
-  url: string;
-  hash: string;
-  totalPages: number;
-  htmlContent?: string;
-}
-
-/**
- * Gera o HTML completo da edição do Diário Oficial
- * Seguindo o layout do PDF real de São Luís
- */
-function generateEditionHTML(data: EditionData, validationHash: string, logoUrl: string = '', expediente: string = ''): string {
-  const { edition, matters } = data;
-  
-  // Formatar data para exibição (ex: QUINTA * 16 DE OUTUBRO DE 2025)
-  const editionDate = new Date(edition.edition_date);
-  const dayOfWeek = editionDate.toLocaleDateString('pt-BR', { weekday: 'long' }).toUpperCase();
-  const day = editionDate.getDate();
-  const month = editionDate.toLocaleDateString('pt-BR', { month: 'long' }).toUpperCase();
-  const year = editionDate.getFullYear();
-  const formattedDate = `${dayOfWeek} * ${day} DE ${month} DE ${year}`;
-  
-  // Calcular ANO (romano ou numérico - vou usar numérico)
-  const foundationYear = 1980; // Assumindo fundação do diário
-  const yearsSinceFoundation = year - foundationYear;
-  
-  // Gerar índice organizado por Secretaria e Tipo
-  const indexBySecretaria: Record<string, Record<string, any[]>> = {};
-  let pageCounter = 1;
-  
-  matters.forEach((matter) => {
-    const secName = matter.secretaria_acronym 
-      ? `${matter.secretaria_acronym.toUpperCase()}` 
-      : 'OUTROS';
-    const fullSecName = matter.secretaria_name || 'Outros';
-    const matterType = (matter as any).matter_type_name || 'Outros';
-    
-    if (!indexBySecretaria[secName]) {
-      indexBySecretaria[secName] = { fullName: fullSecName, types: {} };
-    }
-    
-    if (!indexBySecretaria[secName].types[matterType]) {
-      indexBySecretaria[secName].types[matterType] = [];
-    }
-    
-    indexBySecretaria[secName].types[matterType].push({
-      ...matter,
-      page: pageCounter
-    });
-    pageCounter++;
-  });
-  
-  // Ordenar secretarias: primeiro PREFEITURA, depois alfabeticamente
-  const sortedSecretarias = Object.keys(indexBySecretaria).sort((a, b) => {
-    if (a.includes('PREFEITURA')) return -1;
-    if (b.includes('PREFEITURA')) return 1;
-    return a.localeCompare(b);
-  });
-  
-  // Gerar HTML do índice (formato do PDF real)
-  const indexHTML = `
-    <div class="index-section">
-      <h2 class="index-title">ÍNDICE - PREFEITURA MUNICIPAL DE SÃO LUÍS</h2>
-      ${sortedSecretarias.map(secAcronym => {
-        const secData = indexBySecretaria[secAcronym];
-        const types = secData.types;
-        const sortedTypes = Object.keys(types).sort();
-        
-        return `
-          <div class="index-secretaria">
-            <h3 class="index-secretaria-name">${secData.fullName.toUpperCase()}</h3>
-            ${sortedTypes.map(typeName => {
-              const mattersList = types[typeName];
-              
-              return `
-                <div class="index-type">
-                  <h4 class="index-type-name">${typeName.toUpperCase()}</h4>
-                  ${mattersList.map(m => `
-                    <div class="index-item">
-                      <span class="index-item-title">${m.title.toUpperCase()}</span>
-                      <span class="index-item-dots">.................................................................</span>
-                      <span class="index-item-page">${m.page}</span>
-                    </div>
-                  `).join('')}
-                </div>
-              `;
-            }).join('')}
-          </div>
-        `;
-      }).join('')}
-    </div>
-  `;
-  
-  // Gerar HTML de cada matéria
-  const mattersHTML = matters.map((matter, index) => {
-    const columns = matter.layout_columns === 2 ? 'columns-2' : 'columns-1';
-    
-    return `
-      <article class="matter-item ${columns}" data-matter-id="${matter.id}">
-        <div class="matter-header">
-          <h2 class="matter-title">${matter.title}</h2>
-          <div class="matter-meta">
-            <span class="secretaria">${matter.secretaria_acronym} - ${matter.secretaria_name}</span>
-            ${matter.summary ? `<p class="matter-summary">${matter.summary}</p>` : ''}
-          </div>
-        </div>
-        
-        <div class="matter-content">
-          ${matter.content}
-        </div>
-        
-        ${matter.attachments && matter.attachments.length > 0 ? `
-          <div class="matter-attachments">
-            <h4 class="attachments-title">Anexos:</h4>
-            <ul class="attachments-list">
-              ${matter.attachments.map(att => `
-                <li class="attachment-item">
-                  <a href="${att.file_url}" target="_blank" class="attachment-link">
-                    📎 ${att.original_name || att.filename}
-                    ${att.file_size ? ` (${(att.file_size / 1024).toFixed(2)} KB)` : ''}
-                  </a>
-                </li>
-              `).join('')}
-            </ul>
-          </div>
-        ` : ''}
-        
-        <div class="matter-footer">
-          <div class="signature-info">
-            ${matter.signed_at ? `
-              <p><strong>Assinado digitalmente em:</strong> ${new Date(matter.signed_at).toLocaleString('pt-BR')}</p>
-              ${matter.signature_hash ? `<p class="signature-hash"><strong>Hash:</strong> ${matter.signature_hash.substring(0, 16)}...</p>` : ''}
-            ` : ''}
-          </div>
-          <!-- Removed individual matter publisher info -->
-        </div>
-      </article>
-      ${index < matters.length - 1 ? '<hr class="matter-divider">' : ''}
-    `;
-  }).join('\n');
-  
-  // HTML completo com estilos para impressão
-  return `
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Diário Oficial Municipal - Edição ${edition.edition_number}</title>
-  <style>
-    /* Reset e configurações base */
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    
-    @page {
-      size: A4;
-      margin: 2cm 1.5cm;
-      
-      @top-center {
-        content: "Diário Oficial Municipal";
-        font-family: 'Georgia', serif;
-        font-size: 10pt;
-        color: #666;
-      }
-      
-      @bottom-center {
-        content: "Página " counter(page) " de " counter(pages);
-        font-family: 'Georgia', serif;
-        font-size: 9pt;
-        color: #666;
-      }
-    }
-    
-    body {
-      font-family: 'Georgia', 'Times New Roman', serif;
-      font-size: 11pt;
-      line-height: 1.6;
-      color: #333;
-      background: white;
-    }
-    
-    /* Cabeçalho da edição - Estilo do PDF real */
-    .edition-header {
-      border: 3px solid #0066cc;
-      border-radius: 8px;
-      padding: 1rem;
-      margin-bottom: 2rem;
-      page-break-after: avoid;
-      background: linear-gradient(to bottom, #f0f9ff 0%, white 100%);
-    }
-    
-    .header-top {
-      display: grid;
-      grid-template-columns: 1fr auto 1fr;
-      align-items: center;
-      gap: 1rem;
-    }
-    
-    .header-left, .header-right {
-      font-size: 9pt;
-      font-weight: bold;
-      color: #333;
-    }
-    
-    .header-right {
-      text-align: right;
-    }
-    
-    .header-center {
-      text-align: center;
-    }
-    
-    .edition-header .logo {
-      width: 100px;
-      height: 100px;
-      margin: 0 auto 0.5rem;
-      display: block;
-      object-fit: contain;
-      border-radius: 4px;
-    }
-    
-    .logo-placeholder {
-      font-size: 60px;
-      margin: 0 auto 0.5rem;
-    }
-    
-    .edition-header h1 {
-      font-size: 36pt;
-      font-weight: bold;
-      color: #1e40af;
-      margin: 0;
-      letter-spacing: 2px;
-    }
-    
-    .edition-header .highlight {
-      color: #0066cc;
-    }
-    
-    .edition-header .subtitle {
-      font-size: 11pt;
-      color: #666;
-      margin-top: 0.3rem;
-    }
-    
-    /* Aviso de Edição Suplementar */
-    .supplemental-notice {
-      margin: 1rem 0;
-      padding: 1rem;
-      background-color: #fef3c7;
-      border-left: 4px solid #f59e0b;
-      border-radius: 4px;
-      font-size: 11pt;
-      color: #92400e;
-      text-align: center;
-      page-break-after: avoid;
-    }
-    
-    .supplemental-notice i {
-      margin-right: 0.5rem;
-      color: #f59e0b;
-    }
-    
-    /* Expediente */
-    .expediente-section {
-      margin: 1rem 0;
-      padding: 1rem;
-      background-color: #f8fafc;
-      border: 1px solid #cbd5e1;
-      border-radius: 4px;
-      page-break-after: avoid;
-    }
-    
-    .expediente-title {
-      font-size: 12pt;
-      font-weight: bold;
-      color: #0066cc;
-      text-align: center;
-      margin-bottom: 0.8rem;
-      text-transform: uppercase;
-    }
-    
-    .expediente-content {
-      font-size: 9pt;
-      line-height: 1.5;
-      color: #333;
-      text-align: justify;
-      white-space: pre-wrap;
-    }
-    
-    /* Índice - Estilo do PDF real */
-    .index-section {
-      margin: 1rem 0;
-      padding: 0;
-      background-color: #f8fafc;
-      page-break-after: always;
-    }
-    
-    .index-title {
-      font-size: 14pt;
-      font-weight: bold;
-      color: #000;
-      text-align: center;
-      margin-bottom: 1rem;
-      text-transform: uppercase;
-      background-color: #e0e0e0;
-      padding: 0.5rem;
-      border-top: 2px solid #000;
-      border-bottom: 2px solid #000;
-    }
-    
-    .index-secretaria {
-      margin-bottom: 1rem;
-      page-break-inside: avoid;
-    }
-    
-    .index-secretaria-name {
-      font-size: 11pt;
-      font-weight: bold;
-      color: #000;
-      margin-bottom: 0.5rem;
-      text-transform: uppercase;
-      padding: 0.2rem 0;
-    }
-    
-    .index-type {
-      margin-bottom: 0.8rem;
-      margin-left: 1rem;
-      page-break-inside: avoid;
-    }
-    
-    .index-type-name {
-      font-size: 10pt;
-      font-weight: bold;
-      color: #0066cc;
-      margin-bottom: 0.3rem;
-      text-transform: uppercase;
-      padding-left: 0.5rem;
-      border-left: 3px solid #0066cc;
-    }
-    
-    .index-item {
-      display: grid;
-      grid-template-columns: 1fr auto auto;
-      gap: 0.5rem;
-      padding: 0.15rem 0;
-      padding-left: 0.5rem;
-      font-size: 9pt;
-      line-height: 1.3;
-      align-items: center;
-    }
-    
-    .index-item-title {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    
-    .index-item-dots {
-      color: #ccc;
-      overflow: hidden;
-      white-space: nowrap;
-    }
-    
-    .index-item-page {
-      font-weight: bold;
-      min-width: 30px;
-      text-align: right;
-    }
-    
-    .index-matter-title {
-      flex: 1;
-      color: #333;
-    }
-    
-    .index-matter-page {
-      margin-left: 1rem;
-      color: #666;
-      font-weight: bold;
-      white-space: nowrap;
-    }
-    
-    /* Matérias */
-    .matter-item {
-      margin-bottom: 2rem;
-      page-break-inside: avoid;
-    }
-    
-    .matter-header {
-      margin-bottom: 1rem;
-      page-break-after: avoid;
-    }
-    
-    .matter-title {
-      font-size: 14pt;
-      font-weight: bold;
-      color: #1e40af;
-      margin-bottom: 0.5rem;
-      text-transform: uppercase;
-    }
-    
-    .matter-meta {
-      font-size: 10pt;
-      color: #666;
-      margin-bottom: 0.5rem;
-    }
-    
-    .secretaria {
-      font-weight: bold;
-      color: #059669;
-    }
-    
-    .matter-summary {
-      font-style: italic;
-      margin-top: 0.5rem;
-      color: #555;
-    }
-    
-    .matter-content {
-      text-align: justify;
-      margin-bottom: 1rem;
-      hyphens: auto;
-    }
-    
-    .matter-content p {
-      margin-bottom: 0.8rem;
-    }
-    
-    .matter-content h1,
-    .matter-content h2,
-    .matter-content h3 {
-      margin-top: 1rem;
-      margin-bottom: 0.5rem;
-      color: #1e40af;
-    }
-    
-    .matter-content ul,
-    .matter-content ol {
-      margin-left: 2rem;
-      margin-bottom: 0.8rem;
-    }
-    
-    .matter-content table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 1rem;
-    }
-    
-    .matter-content table th,
-    .matter-content table td {
-      border: 1px solid #ccc;
-      padding: 0.5rem;
-      text-align: left;
-    }
-    
-    .matter-content table th {
-      background-color: #f3f4f6;
-      font-weight: bold;
-    }
-    
-    /* Anexos */
-    .matter-attachments {
-      margin-top: 1rem;
-      padding: 0.8rem;
-      background-color: #f8fafc;
-      border-left: 3px solid #0066cc;
-      border-radius: 4px;
-      page-break-inside: avoid;
-    }
-    
-    .attachments-title {
-      font-size: 10pt;
-      font-weight: bold;
-      color: #0066cc;
-      margin-bottom: 0.5rem;
-    }
-    
-    .attachments-list {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-    }
-    
-    .attachment-item {
-      margin-bottom: 0.3rem;
-      font-size: 9pt;
-    }
-    
-    .attachment-link {
-      color: #0066cc;
-      text-decoration: underline;
-      word-break: break-all;
-    }
-    
-    .attachment-link:hover {
-      color: #004499;
-    }
-    
-    /* Layout de colunas */
-    .columns-2 .matter-content {
-      column-count: 2;
-      column-gap: 1.5rem;
-      column-rule: 1px solid #ddd;
-    }
-    
-    .columns-1 .matter-content {
-      column-count: 1;
-    }
-    
-    .matter-footer {
-      font-size: 9pt;
-      color: #666;
-      border-top: 1px solid #e5e7eb;
-      padding-top: 0.5rem;
-      margin-top: 1rem;
-      page-break-inside: avoid;
-    }
-    
-    .signature-info {
-      margin-bottom: 0.5rem;
-    }
-    
-    .signature-hash {
-      font-family: 'Courier New', monospace;
-      font-size: 8pt;
-      color: #999;
-      word-break: break-all;
-    }
-    
-    .author-info {
-      font-style: italic;
-    }
-    
-    .matter-divider {
-      border: none;
-      border-top: 2px dashed #d1d5db;
-      margin: 2rem 0;
-    }
-    
-    /* Rodapé da edição - Estilo do PDF real */
-    .edition-footer {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      background: #f8fafc;
-      border-top: 2px solid #0066cc;
-      padding: 0.5rem 1rem;
-      font-size: 7pt;
-      color: #333;
-      page-break-inside: avoid;
-    }
-    
-    .footer-content {
-      display: grid;
-      grid-template-columns: 2fr auto 2fr;
-      gap: 1rem;
-      align-items: center;
-      margin-bottom: 0.3rem;
-    }
-    
-    .footer-left {
-      text-align: left;
-    }
-    
-    .footer-center {
-      text-align: center;
-    }
-    
-    .footer-right {
-      text-align: right;
-      display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-    }
-    
-    .footer-text {
-      margin: 0;
-      line-height: 1.3;
-    }
-    
-    .footer-url {
-      margin: 0;
-      font-weight: bold;
-      color: #0066cc;
-    }
-    
-    .footer-page {
-      font-weight: bold;
-      font-size: 8pt;
-      margin: 0;
-    }
-    
-    .qr-code-placeholder {
-      margin-top: 0.2rem;
-    }
-    
-    .validation-info {
-      text-align: center;
-      padding-top: 0.3rem;
-      border-top: 1px solid #ddd;
-    }
-    
-    .validation-hash {
-      font-family: 'Courier New', monospace;
-      font-size: 7pt;
-      color: #666;
-      margin: 0;
-    }
-    
-    /* Estilos para impressão */
-    @media print {
-      body {
-        background: white;
-      }
-      
-      .matter-item {
-        page-break-inside: avoid;
-      }
-      
-      .matter-header {
-        page-break-after: avoid;
-      }
-      
-      .matter-footer {
-        page-break-inside: avoid;
-      }
-      
-      a {
-        text-decoration: none;
-        color: inherit;
-      }
-      
-      /* Evitar quebra de página em elementos importantes */
-      h1, h2, h3, h4, h5, h6 {
-        page-break-after: avoid;
-      }
-      
-      img {
-        max-width: 100%;
-        page-break-inside: avoid;
-      }
-    }
-  </style>
-</head>
-<body>
-  <header class="edition-header">
-    <div class="header-top">
-      <div class="header-left">SÃO LUÍS/MA * ${formattedDate}</div>
-      <div class="header-center">
-        ${logoUrl ? `<img src="${logoUrl}" alt="Brasão" class="logo">` : `<div class="logo-placeholder">🏛️</div>`}
-        <h1>Diário Oficial</h1>
-        <p class="subtitle">Município de São Luís</p>
-      </div>
-      <div class="header-right">ANO XLV * N.º ${edition.edition_number} * ISSN 2764-8958</div>
-    </div>
-  </header>
-  
-  ${data.edition.is_supplemental && data.edition.parent_edition_number ? `
-  <div class="supplemental-notice">
-    <i class="fas fa-info-circle"></i>
-    <strong>EDIÇÃO SUPLEMENTAR</strong> da Edição Normal N.º ${data.edition.parent_edition_number} de ${formattedDate}
-  </div>
-  ` : ''}
-  
-  ${expediente ? `
-  <section class="expediente-section">
-    <h2 class="expediente-title">EXPEDIENTE</h2>
-    <div class="expediente-content">${expediente}</div>
-  </section>
-  ` : ''}
-  
-  ${indexHTML}
-  
-  <main class="edition-content">
-    ${mattersHTML}
-  </main>
-  
-  ${data.publisher ? `
-  <div class="publisher-info" style="margin-top: 2rem; padding: 1rem; background-color: #f8fafc; border-top: 2px solid #0066cc; text-align: center;">
-    <p style="margin: 0; font-size: 10pt; color: #333;">
-      <strong>Publicado por:</strong> ${data.publisher.name} - ${data.publisher.secretaria_acronym}
-    </p>
-  </div>
-  ` : ''}
-  
-  <footer class="edition-footer">
-    <div class="footer-content">
-      <div class="footer-left">
-        <p class="footer-text">Este documento pode ser verificado no endereço eletrônico</p>
-        <p class="footer-url">https://diariooficial.saoluis.ma.gov.br</p>
-      </div>
-      <div class="footer-center">
-        <p class="footer-page"><strong>1 / ${matters.length + 1}</strong></p>
-      </div>
-      <div class="footer-right">
-        <p class="footer-text">Documento assinado com certificado digital e carimbo de tempo,</p>
-        <p class="footer-text">conforme Instrução Normativa N.º 70/2021 do TCE/MA.</p>
-        <div class="qr-code-placeholder" title="QR Code para verificação">
-          <svg viewBox="0 0 100 100" width="60" height="60">
-            <rect width="100" height="100" fill="#fff"/>
-            <path d="M10,10 h20 v20 h-20 z M70,10 h20 v20 h-20 z M10,70 h20 v20 h-20 z" fill="#000"/>
-            <text x="50" y="55" font-size="12" text-anchor="middle">QR</text>
-          </svg>
-        </div>
-      </div>
-    </div>
-    <div class="validation-info">
-      <p class="validation-hash">
-        <strong>Código Identificador:</strong> ${validationHash.substring(0, 36)}
-      </p>
-    </div>
-  </footer>
-</body>
-</html>
-  `.trim();
+  url?: string;
+  hash?: string;
+  totalPages?: number;
+  htmlContent: string;
 }
 
 /**
@@ -791,150 +67,637 @@ async function generateEditionHash(edition: any, matters: any[]): Promise<string
 }
 
 /**
- * Gera o PDF da edição (ou HTML por enquanto)
- * 
- * NOTA: Esta implementação retorna o HTML gerado.
- * Em produção, você precisará integrar com um serviço de conversão HTML→PDF
- * como:
- * - Gotenberg (self-hosted)
- * - PDFShift API
- * - HTML2PDF API
- * - Cloudflare Browser Rendering (quando disponível)
+ * Busca configurações do sistema do banco PostgreSQL
  */
-export async function generateEditionPDF(
-  r2Bucket: R2Bucket,
-  data: EditionData,
-  db: D1Database
-): Promise<PDFResult> {
+async function fetchSystemSettings(db: any) {
   try {
-    // Buscar logo e expediente da prefeitura do sistema de configurações
-    let logoUrl = '';
-    let expedienteText = '';
+    const result = await db.query(`
+      SELECT key, value FROM settings 
+      WHERE key IN ('logo_url', 'expediente', 'city_name', 'office_hours')
+    `);
     
-    try {
-      const logoSetting = await db.prepare(
-        "SELECT value FROM system_settings WHERE key = 'logo_url'"
-      ).first();
-      
-      if (logoSetting && logoSetting.value) {
-        const value = logoSetting.value as string;
-        // Se já é data:image, usar direto; se é JSON, fazer parse
-        if (value.startsWith('data:image')) {
-          logoUrl = value;
-        } else {
-          try {
-            logoUrl = JSON.parse(value);
-          } catch {
-            logoUrl = value; // Usar direto se não for JSON
-          }
-        }
-      }
-    } catch (logoError) {
-      console.warn('Logo não encontrado nas configurações:', logoError);
-      // Continua sem logo se não encontrar
-    }
-    
-    try {
-      const expedienteSetting = await db.prepare(
-        "SELECT value FROM system_settings WHERE key = 'expediente'"
-      ).first();
-      
-      if (expedienteSetting && expedienteSetting.value) {
-        const value = expedienteSetting.value as string;
-        try {
-          expedienteText = JSON.parse(value);
-        } catch {
-          expedienteText = value; // Usar direto se não for JSON
-        }
-      }
-    } catch (expError) {
-      console.warn('Expediente não encontrado nas configurações:', expError);
-      // Continua sem expediente se não encontrar
-    }
-    
-    // Gerar hash do conteúdo PRIMEIRO
-    const contentHash = await generateEditionHash(data.edition, data.matters);
-    
-    // Gerar HTML da edição com o hash já calculado, logo e expediente
-    const htmlContent = generateEditionHTML(data, contentHash, logoUrl, expedienteText);
-    
-    // Nome do arquivo
-    const filename = `diario-oficial-${data.edition.edition_number.replace(/\//g, '-')}-${data.edition.year}.html`;
-    
-    // Por enquanto, salvar o HTML no R2
-    // Em produção, aqui você converteria HTML → PDF usando um serviço externo
-    await r2Bucket.put(filename, htmlContent, {
-      httpMetadata: {
-        contentType: 'text/html; charset=utf-8',
-      },
-      customMetadata: {
-        editionNumber: data.edition.edition_number,
-        editionDate: data.edition.edition_date,
-        year: data.edition.year.toString(),
-        matterCount: data.matters.length.toString(),
-        hash: contentHash
+    const settings: Record<string, any> = {};
+    result.rows.forEach((row: any) => {
+      try {
+        // Tentar fazer parse de JSON, senão usar o valor direto
+        settings[row.key] = JSON.parse(row.value);
+      } catch {
+        settings[row.key] = row.value;
       }
     });
     
-    // URL pública do arquivo (R2 bucket deve estar configurado com domínio público)
-    const publicUrl = `https://dom-pdfs.your-domain.com/${filename}`;
-    
-    // Estimativa de páginas (aproximadamente 1 página por matéria + cabeçalho/rodapé)
-    const estimatedPages = Math.ceil(data.matters.length * 0.8) + 1;
-    
-    return {
-      url: publicUrl,
-      hash: contentHash,
-      totalPages: estimatedPages,
-      htmlContent // Retornar HTML também para debug/preview
-    };
-    
+    return settings;
   } catch (error) {
-    console.error('Error generating edition PDF:', error);
-    throw new Error(`Falha ao gerar PDF: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+    console.warn('⚠️  Erro ao buscar configurações:', error);
+    return {};
   }
 }
 
 /**
- * IMPLEMENTAÇÃO FUTURA: Converter HTML para PDF usando serviço externo
- * 
- * Exemplo com Gotenberg:
- * 
- * const response = await fetch('https://gotenberg.your-domain.com/forms/chromium/convert/html', {
- *   method: 'POST',
- *   body: formData,
- *   headers: { ... }
- * });
- * 
- * const pdfBlob = await response.arrayBuffer();
- * await r2Bucket.put(pdfFilename, pdfBlob, { ... });
+ * Gera o HTML completo da edição do Diário Oficial
  */
+function generateEditionHTML(
+  data: EditionData, 
+  validationHash: string, 
+  settings: {
+    logo_url?: string;
+    expediente?: string;
+    city_name?: string;
+    office_hours?: string;
+  } = {}
+): string {
+  const { edition, matters } = data;
+  const cityName = settings.city_name || 'Município';
+  const expedienteText = settings.expediente || '';
+  const logoUrl = settings.logo_url || '';
+  const officeHours = settings.office_hours || '08:00 às 17:00';
+  
+  // Formatar data para exibição
+  const formatDate = (dateString: string) => {
+    if (!dateString) return '';
+    const date = new Date(dateString);
+    return date.toLocaleDateString('pt-BR', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    }).toUpperCase();
+  };
+  
+  const formattedDate = formatDate(edition.edition_date);
+  
+  // Gerar índice organizado por Secretaria
+  const indexBySecretaria: Record<string, any[]> = {};
+  let pageCounter = 1;
+  
+  matters.forEach((matter) => {
+    const secAcronym = matter.secretaria_acronym || 'OUTROS';
+    
+    if (!indexBySecretaria[secAcronym]) {
+      indexBySecretaria[secAcronym] = [];
+    }
+    
+    indexBySecretaria[secAcronym].push({
+      ...matter,
+      page: pageCounter
+    });
+    
+    pageCounter++;
+  });
+  
+  // Ordenar secretarias
+  const sortedSecretarias = Object.keys(indexBySecretaria).sort((a, b) => {
+    if (a.includes('PREFEITURA')) return -1;
+    if (b.includes('PREFEITURA')) return 1;
+    return a.localeCompare(b);
+  });
+  
+  // Gerar HTML do índice
+  const indexHTML = sortedSecretarias.map(secAcronym => {
+    const mattersList = indexBySecretaria[secAcronym];
+    
+    return `
+      <div class="index-secretaria">
+        <h3 class="index-secretaria-name">${secAcronym}</h3>
+        ${mattersList.map(m => `
+          <div class="index-item">
+            <span class="index-item-title">${m.title.toUpperCase()}</span>
+            <span class="index-item-dots">.................................</span>
+            <span class="index-item-page">${m.page}</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }).join('');
+  
+  // Gerar HTML de cada matéria
+  const mattersHTML = matters.map((matter, index) => {
+    const columns = matter.layout_columns === 2 ? 'columns-2' : 'columns-1';
+    
+    return `
+      <article class="matter-item ${columns}" data-matter-id="${matter.id}">
+        <div class="matter-header">
+          <div class="matter-number">${index + 1}</div>
+          <div class="matter-title-section">
+            <h2 class="matter-title">${matter.title}</h2>
+            <div class="matter-meta">
+              <span class="secretaria">${matter.secretaria_acronym} - ${matter.secretaria_name}</span>
+            </div>
+          </div>
+        </div>
+        
+        ${matter.summary ? `
+          <div class="matter-summary">
+            <strong>Resumo:</strong> ${matter.summary}
+          </div>
+        ` : ''}
+        
+        <div class="matter-content">
+          ${matter.content}
+        </div>
+        
+        ${matter.attachments && matter.attachments.length > 0 ? `
+          <div class="matter-attachments">
+            <h4 class="attachments-title">Anexos:</h4>
+            <ul class="attachments-list">
+              ${matter.attachments.map(att => `
+                <li class="attachment-item">
+                  <a href="${att.file_url}" target="_blank" class="attachment-link">
+                    📎 ${att.filename}
+                    ${att.file_size ? ` (${formatFileSize(att.file_size)})` : ''}
+                  </a>
+                </li>
+              `).join('')}
+            </ul>
+          </div>
+        ` : ''}
+        
+        <div class="matter-footer">
+          <div class="author-info">
+            <strong>Autor:</strong> ${matter.author_name || 'Não informado'}
+          </div>
+          ${matter.signed_at ? `
+            <div class="signature-info">
+              <strong>Assinado em:</strong> ${formatDate(matter.signed_at)}
+            </div>
+          ` : ''}
+        </div>
+      </article>
+      ${index < matters.length - 1 ? '<hr class="matter-divider">' : ''}
+    `;
+  }).join('\n');
+  
+  // HTML completo
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diário Oficial - Edição ${edition.edition_number}</title>
+  <style>
+    /* Reset e configurações base */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Georgia', 'Times New Roman', serif;
+      font-size: 12pt;
+      line-height: 1.5;
+      color: #000;
+      background: #fff;
+      padding: 20mm;
+    }
+    
+    @media print {
+      body {
+        padding: 0;
+      }
+      
+      .page-break {
+        page-break-before: always;
+      }
+    }
+    
+    /* Cabeçalho */
+    .edition-header {
+      text-align: center;
+      margin-bottom: 20px;
+      border-bottom: 3px solid #000;
+      padding-bottom: 15px;
+    }
+    
+    .logo {
+      max-height: 80px;
+      margin-bottom: 10px;
+    }
+    
+    .main-title {
+      font-size: 24pt;
+      font-weight: bold;
+      text-transform: uppercase;
+      margin: 10px 0;
+    }
+    
+    .subtitle {
+      font-size: 14pt;
+      margin-bottom: 10px;
+    }
+    
+    .edition-info {
+      font-size: 12pt;
+      margin: 15px 0;
+    }
+    
+    .edition-number {
+      font-weight: bold;
+      color: #000;
+    }
+    
+    .edition-date {
+      font-style: italic;
+    }
+    
+    /* Índice */
+    .index-section {
+      margin: 30px 0;
+      border: 1px solid #ccc;
+      padding: 15px;
+      background: #f9f9f9;
+    }
+    
+    .index-title {
+      font-size: 16pt;
+      font-weight: bold;
+      text-align: center;
+      margin-bottom: 20px;
+      color: #000;
+    }
+    
+    .index-secretaria {
+      margin-bottom: 15px;
+    }
+    
+    .index-secretaria-name {
+      font-size: 12pt;
+      font-weight: bold;
+      color: #333;
+      margin-bottom: 8px;
+      border-bottom: 1px solid #ddd;
+      padding-bottom: 5px;
+    }
+    
+    .index-item {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 5px;
+      font-size: 10pt;
+    }
+    
+    .index-item-title {
+      flex: 1;
+    }
+    
+    .index-item-dots {
+      flex-grow: 1;
+      border-bottom: 1px dotted #999;
+      margin: 0 10px;
+      height: 12px;
+    }
+    
+    .index-item-page {
+      font-weight: bold;
+    }
+    
+    /* Matérias */
+    .matter-item {
+      margin: 25px 0;
+      border: 1px solid #ddd;
+      padding: 20px;
+      page-break-inside: avoid;
+    }
+    
+    .matter-header {
+      display: flex;
+      margin-bottom: 15px;
+      border-bottom: 1px solid #ccc;
+      padding-bottom: 10px;
+    }
+    
+    .matter-number {
+      font-size: 20pt;
+      font-weight: bold;
+      background: #000;
+      color: #fff;
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-right: 15px;
+      border-radius: 5px;
+    }
+    
+    .matter-title-section {
+      flex: 1;
+    }
+    
+    .matter-title {
+      font-size: 14pt;
+      font-weight: bold;
+      color: #000;
+      margin-bottom: 5px;
+    }
+    
+    .matter-meta {
+      font-size: 10pt;
+      color: #666;
+    }
+    
+    .secretaria {
+      font-weight: bold;
+      color: #0066cc;
+    }
+    
+    .matter-summary {
+      background: #f5f5f5;
+      padding: 10px;
+      margin: 15px 0;
+      border-left: 3px solid #0066cc;
+      font-style: italic;
+    }
+    
+    .matter-content {
+      margin: 15px 0;
+      text-align: justify;
+    }
+    
+    .matter-content p {
+      margin-bottom: 10px;
+    }
+    
+    .matter-attachments {
+      margin: 15px 0;
+      padding: 10px;
+      background: #f8f9fa;
+      border-left: 3px solid #28a745;
+    }
+    
+    .attachments-title {
+      font-size: 11pt;
+      font-weight: bold;
+      margin-bottom: 8px;
+      color: #28a745;
+    }
+    
+    .attachments-list {
+      list-style: none;
+      padding-left: 0;
+    }
+    
+    .attachment-item {
+      margin-bottom: 5px;
+    }
+    
+    .attachment-link {
+      color: #0066cc;
+      text-decoration: none;
+    }
+    
+    .attachment-link:hover {
+      text-decoration: underline;
+    }
+    
+    /* Layout de colunas */
+    .columns-2 .matter-content {
+      column-count: 2;
+      column-gap: 20px;
+    }
+    
+    .columns-1 .matter-content {
+      column-count: 1;
+    }
+    
+    /* Rodapé da matéria */
+    .matter-footer {
+      margin-top: 15px;
+      padding-top: 10px;
+      border-top: 1px dashed #ccc;
+      font-size: 10pt;
+      color: #666;
+      display: flex;
+      justify-content: space-between;
+    }
+    
+    .author-info, .signature-info {
+      flex: 1;
+    }
+    
+    .matter-divider {
+      border: none;
+      border-top: 2px dashed #ddd;
+      margin: 30px 0;
+    }
+    
+    /* Rodapé da edição */
+    .edition-footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 2px solid #000;
+      text-align: center;
+      font-size: 10pt;
+      color: #666;
+    }
+    
+    .publisher-info {
+      margin-bottom: 10px;
+    }
+    
+    .validation-info {
+      margin-top: 15px;
+      padding: 10px;
+      background: #f8f9fa;
+      border: 1px solid #ddd;
+      font-family: monospace;
+      font-size: 9pt;
+      word-break: break-all;
+    }
+    
+    .validation-hash {
+      color: #333;
+    }
+    
+    .office-hours {
+      margin-top: 10px;
+      font-style: italic;
+    }
+    
+    /* Suplementar */
+    .supplemental-notice {
+      background: #fff3cd;
+      border: 1px solid #ffeaa7;
+      padding: 15px;
+      margin: 15px 0;
+      text-align: center;
+      font-weight: bold;
+      color: #856404;
+    }
+    
+    /* Expediente */
+    .expediente-section {
+      background: #f8f9fa;
+      border: 1px solid #ddd;
+      padding: 15px;
+      margin: 15px 0;
+    }
+    
+    .expediente-title {
+      font-size: 12pt;
+      font-weight: bold;
+      text-align: center;
+      margin-bottom: 10px;
+      color: #000;
+    }
+    
+    .expediente-content {
+      font-size: 10pt;
+      text-align: justify;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <header class="edition-header">
+    ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo">` : ''}
+    
+    <h1 class="main-title">DIÁRIO OFICIAL</h1>
+    <h2 class="subtitle">${cityName.toUpperCase()}</h2>
+    
+    <div class="edition-info">
+      <div class="edition-number">Edição: ${edition.edition_number}</div>
+      <div class="edition-date">${formattedDate}</div>
+      <div>Ano: ${edition.year}</div>
+    </div>
+  </header>
+  
+  ${edition.is_supplemental ? `
+    <div class="supplemental-notice">
+      ⚠️ EDIÇÃO SUPLEMENTAR
+      ${edition.parent_edition_number ? `da Edição ${edition.parent_edition_number}` : ''}
+    </div>
+  ` : ''}
+  
+  ${expedienteText ? `
+    <section class="expediente-section">
+      <h3 class="expediente-title">EXPEDIENTE</h3>
+      <div class="expediente-content">${expedienteText}</div>
+    </section>
+  ` : ''}
+  
+  ${indexHTML ? `
+    <section class="index-section">
+      <h2 class="index-title">ÍNDICE</h2>
+      ${indexHTML}
+    </section>
+  ` : ''}
+  
+  <main class="edition-content">
+    ${mattersHTML}
+  </main>
+  
+  ${data.publisher ? `
+    <div class="publisher-info">
+      <strong>Publicado por:</strong> ${data.publisher.name} 
+      ${data.publisher.secretaria_acronym ? `(${data.publisher.secretaria_acronym})` : ''}
+      <br>
+      <em>${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</em>
+    </div>
+  ` : ''}
+  
+  <div class="office-hours">
+    <strong>Expediente:</strong> ${officeHours}
+  </div>
+  
+  <footer class="edition-footer">
+    <div class="validation-info">
+      <strong>Código de Validação:</strong>
+      <div class="validation-hash">${validationHash}</div>
+      <small>Use este código para verificar a autenticidade do documento em https://diariooficial.saoluis.ma.gov.br/verificar</small>
+    </div>
+  </footer>
+</body>
+</html>`;
+}
+
+/**
+ * Formata tamanho de arquivo
+ */
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 Bytes';
+  
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+/**
+ * Gera o PDF/HTML da edição - Versão PostgreSQL
+ */
+export async function generateEditionPDF(
+  c: any,
+  data: EditionData,
+  db: any
+): Promise<PDFResult> {
+  try {
+    console.log('🎨 Gerando PDF/HTML para edição:', data.edition.edition_number);
+    
+    // Buscar configurações do sistema
+    const settings = await fetchSystemSettings(db);
+    
+    // Gerar hash do conteúdo
+    const contentHash = await generateEditionHash(data.edition, data.matters);
+    
+    // Gerar HTML da edição
+    const htmlContent = generateEditionHTML(data, contentHash, settings);
+    
+    // Estimativa de páginas
+    const estimatedPages = Math.ceil(data.matters.length * 0.8) + 1;
+    
+    return {
+      htmlContent,
+      hash: contentHash,
+      totalPages: estimatedPages
+    };
+    
+  } catch (error: any) {
+    console.error('❌ Erro ao gerar PDF/HTML:', error);
+    throw new Error(`Falha ao gerar PDF: ${error.message}`);
+  }
+}
 
 /**
  * Valida se um hash de edição é autêntico
  */
 export async function validateEditionHash(
-  db: D1Database,
+  db: any,
   editionId: number,
   providedHash: string
 ): Promise<boolean> {
-  // Buscar edição e suas matérias
-  const edition = await db.prepare('SELECT * FROM editions WHERE id = ?').bind(editionId).first();
-  
-  if (!edition) {
+  try {
+    // Buscar edição
+    const editionResult = await db.query(
+      'SELECT * FROM editions WHERE id = $1',
+      [editionId]
+    );
+    
+    const edition = editionResult.rows[0];
+    
+    if (!edition) {
+      return false;
+    }
+    
+    // Buscar matérias da edição
+    const mattersResult = await db.query(`
+      SELECT m.id
+      FROM edition_matters em
+      INNER JOIN matters m ON em.matter_id = m.id
+      WHERE em.edition_id = $1
+      ORDER BY em.display_order ASC
+    `, [editionId]);
+    
+    const matters = mattersResult.rows;
+    
+    // Recalcular hash
+    const calculatedHash = await generateEditionHash(edition, matters);
+    
+    return calculatedHash === providedHash;
+    
+  } catch (error) {
+    console.error('❌ Erro ao validar hash:', error);
     return false;
   }
-  
-  const { results: matters } = await db.prepare(`
-    SELECT m.id
-    FROM edition_matters em
-    INNER JOIN matters m ON em.matter_id = m.id
-    WHERE em.edition_id = ?
-    ORDER BY em.display_order ASC
-  `).bind(editionId).all();
-  
-  // Recalcular hash
-  const calculatedHash = await generateEditionHash(edition, matters as any[]);
-  
-  return calculatedHash === providedHash;
 }
