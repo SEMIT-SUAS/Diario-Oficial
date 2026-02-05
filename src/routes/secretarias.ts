@@ -25,7 +25,7 @@ secretarias.get('/', async (c) => {
         s.acronym,
         s.active
       FROM secretarias s
-      WHERE s.active = true
+      WHERE s.active = 1
       ORDER BY s.name ASC
     `);
     
@@ -140,7 +140,7 @@ secretarias.post('/', requireRole('admin'), async (c) => {
       INSERT INTO secretarias (
         name, acronym, email, phone, responsible,
         active, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, true, NOW(), NOW())
+      ) VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW())
       RETURNING id
     `, [
       name,
@@ -310,7 +310,7 @@ secretarias.delete('/:id', requireRole('admin'), async (c) => {
     if (hasUsage) {
       // Soft delete - apenas desativa
       await db.query(
-        'UPDATE secretarias SET active = false, updated_at = NOW() WHERE id = $1',
+        'UPDATE secretarias SET active = 0, updated_at = NOW() WHERE id = $1',
         [id]
       );
       
