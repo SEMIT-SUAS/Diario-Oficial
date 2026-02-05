@@ -61,11 +61,11 @@ editions.get('/:id/pdf', async (c) => {
     
     const matters = mattersResult.rows;
     
-    // Buscar anexos de cada matéria
+    // Buscar anexos de cada matéria - CORREÇÃO: usar mime_type em vez de file_type
     const mattersWithAttachments = await Promise.all(
       matters.map(async (matter) => {
         const attachmentsResult = await db.query(`
-          SELECT id, filename, file_url, file_size, file_type, original_name
+          SELECT id, filename, file_url, file_size, mime_type, original_name
           FROM attachments
           WHERE matter_id = $1
         `, [matter.id]);
@@ -170,11 +170,11 @@ editions.get('/:id/preview', async (c) => {
     
     const matters = mattersResult.rows;
     
-    // Buscar anexos
+    // Buscar anexos - CORREÇÃO: usar mime_type em vez de file_type
     const mattersWithAttachments = await Promise.all(
       matters.map(async (matter) => {
         const attachmentsResult = await db.query(`
-          SELECT id, filename, file_url, file_size, file_type, original_name
+          SELECT id, filename, file_url, file_size, mime_type, original_name
           FROM attachments
           WHERE matter_id = $1
         `, [matter.id]);
@@ -219,7 +219,7 @@ editions.get('/:id/preview', async (c) => {
       box-shadow: 0 4px 6px rgba(0,0,0,0.1);
       z-index: 1000;
       display: flex;
-      justify-content: space-between;
+      justify-content:space-between;
       align-items: center;
     }
     .preview-info {
@@ -424,13 +424,11 @@ editions.get('/:id', async (c) => {
       return c.json({ error: 'Edição não encontrada' }, 404);
     }
     
-    // Buscar matérias da edição
+    // Buscar matérias da edição - CORRIGIDO: removido page_start e page_end
     const mattersResult = await db.query(`
       SELECT 
         m.*,
         em.display_order,
-        em.page_start,
-        em.page_end,
         em.added_at,
         s.name as secretaria_name,
         s.acronym as secretaria_acronym,
@@ -469,6 +467,19 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
     
     let { edition_number, edition_date, year, is_supplemental = false } = await c.req.json();
     
+    // 🔍 CORREÇÃO: Converter is_supplemental para integer (0 ou 1)
+    // Pode vir como boolean true/false ou string 'true'/'false' do JSON
+    const isSupplementalInt = (is_supplemental === true || is_supplemental === 'true') ? 1 : 0;
+    
+    console.log('📦 Dados recebidos:', {
+      edition_number,
+      edition_date,
+      year,
+      is_supplemental,
+      type: typeof is_supplemental,
+      converted: isSupplementalInt
+    });
+    
     // Data automática (hoje) se não fornecida
     if (!edition_date) {
       edition_date = new Date().toISOString().split('T')[0];
@@ -481,11 +492,11 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
     
     // Número automático se não fornecido
     if (!edition_number) {
-      if (is_supplemental) {
+      if (isSupplementalInt === 1) { // ⚠️ Agora compara com 1
         // Para edição suplementar: buscar último suplemento do ano
         const lastSupplementResult = await db.query(`
           SELECT edition_number, supplemental_number FROM editions 
-          WHERE year = $1 AND is_supplemental = true
+          WHERE year = $1 AND is_supplemental = 1
           ORDER BY CAST(COALESCE(supplemental_number, '0') AS INTEGER) DESC 
           LIMIT 1
         `, [parseInt(year)]);
@@ -505,7 +516,7 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
         // Para edição normal: buscar última edição normal do ano
         const lastEditionResult = await db.query(`
           SELECT edition_number FROM editions 
-          WHERE year = $1 AND (is_supplemental = false OR is_supplemental IS NULL)
+          WHERE year = $1 AND (is_supplemental = 0 OR is_supplemental IS NULL)
           ORDER BY CAST(SUBSTRING(edition_number FROM '^\\d+') AS INTEGER) DESC 
           LIMIT 1
         `, [parseInt(year)]);
@@ -529,7 +540,7 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
     
     // Extrair supplemental_number se for suplementar
     let supplemental_number = null;
-    if (is_supplemental) {
+    if (isSupplementalInt === 1) {
       const match = edition_number.match(/^(\d+)-[A-Z]\//);
       if (match) {
         supplemental_number = match[1];
@@ -548,11 +559,11 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
     
     // Se for suplementar, buscar edição normal do mesmo dia para referenciar
     let parent_edition_id = null;
-    if (is_supplemental) {
+    if (isSupplementalInt === 1) {
       const parentEditionResult = await db.query(`
         SELECT id, edition_number FROM editions 
         WHERE edition_date = $1 
-        AND (is_supplemental = false OR is_supplemental IS NULL)
+        AND (is_supplemental = 0 OR is_supplemental IS NULL)
         AND status = 'published'
         LIMIT 1
       `, [edition_date]);
@@ -562,7 +573,17 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
       }
     }
     
-    // Criar edição
+    // Criar edição - 🔍 CORREÇÃO: usar valor inteiro
+    console.log('📝 Valores para INSERT:', {
+      edition_number,
+      edition_date,
+      year: parseInt(year),
+      is_supplemental: isSupplementalInt,
+      type_is_supplemental: typeof isSupplementalInt,
+      supplemental_number,
+      parent_edition_id
+    });
+    
     const result = await db.query(`
       INSERT INTO editions (
         edition_number, edition_date, year, status,
@@ -574,7 +595,7 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
       edition_number, 
       edition_date, 
       parseInt(year), 
-      is_supplemental,
+      isSupplementalInt,  // ⚠️ Agora é 0 ou 1
       supplemental_number,
       parent_edition_id
     ]);
@@ -595,25 +616,36 @@ editions.post('/', requireRole('admin', 'semad'), async (c) => {
       'edition',
       editionId,
       'create',
-      JSON.stringify({ edition_number, edition_date, year, is_supplemental }),
+      JSON.stringify({ 
+        edition_number, 
+        edition_date, 
+        year, 
+        is_supplemental: isSupplementalInt  // Salvar como 0/1 no log
+      }),
       ipAddress,
       userAgent
     ]);
     
     return c.json({
-      message: is_supplemental ? 'Edição suplementar criada com sucesso' : 'Edição criada com sucesso',
+      message: isSupplementalInt === 1 ? 'Edição suplementar criada com sucesso' : 'Edição criada com sucesso',
       edition: {
         id: editionId,
         edition_number,
         edition_date,
         year,
-        is_supplemental,
+        is_supplemental: isSupplementalInt === 1, // Retornar boolean para o frontend
         status: 'draft'
       }
     }, 201);
     
   } catch (error: any) {
-    console.error('Error creating edition:', error);
+    console.error('❌ Error creating edition:', error);
+    console.error('❌ Error details:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint
+    });
     return c.json({ error: 'Erro ao criar edição', details: error.message }, 500);
   }
 });
@@ -762,11 +794,8 @@ editions.post('/:id/add-matter', requireRole('admin', 'semad'), async (c) => {
       ) VALUES ($1, $2, $3, $4, NOW())
     `, [editionId, matter_id, nextOrder, user.id]);
     
-    // Atualizar campo edition_id na matéria
-    await db.query(
-      'UPDATE matters SET edition_id = $1, updated_at = NOW() WHERE id = $2',
-      [editionId, matter_id]
-    );
+    // CORREÇÃO: NÃO atualizar campo edition_id na matéria (a tabela matters não tem edition_id)
+    // Em vez disso, usar apenas a tabela de relacionamento edition_matters
     
     // Log de auditoria
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -886,11 +915,8 @@ editions.post('/:id/add-matters', requireRole('admin', 'semad'), async (c) => {
           ) VALUES ($1, $2, $3, $4, NOW())
         `, [editionId, matterId, currentOrder, user.id]);
         
-        // Atualizar campo edition_id na matéria
-        await db.query(
-          'UPDATE matters SET edition_id = $1, updated_at = NOW() WHERE id = $2',
-          [editionId, matterId]
-        );
+        // CORREÇÃO: NÃO atualizar campo edition_id na matéria (a tabela matters não tem edition_id)
+        // Usar apenas a tabela de relacionamento edition_matters
         
         results.added.push(matterId);
         currentOrder++;
@@ -972,11 +998,8 @@ editions.delete('/:id/remove-matter/:matterId', requireRole('admin', 'semad'), a
       [editionId, matterId]
     );
     
-    // Remover edition_id da matéria
-    await db.query(
-      'UPDATE matters SET edition_id = NULL, updated_at = NOW() WHERE id = $1',
-      [matterId]
-    );
+    // CORREÇÃO: NÃO remover edition_id da matéria (a tabela matters não tem edition_id)
+    // Apenas remover da tabela de relacionamento edition_matters
     
     // Log de auditoria
     const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
@@ -1126,31 +1149,30 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
     
     const publisher = publisherResult.rows[0];
     
-    // Buscar todas as matérias da edição ordenadas com anexos
+    // Buscar todas as matérias da edição ordenadas com anexos - CORRIGIDO
     const mattersResult = await db.query(`
       SELECT 
         m.*,
+        em.display_order,
+        em.added_at,
         s.name as secretaria_name,
         s.acronym as secretaria_acronym,
-        u.name as author_name,
-        em.display_order,
-        mt.name as matter_type_name
+        u.name as author_name
       FROM edition_matters em
       INNER JOIN matters m ON em.matter_id = m.id
       LEFT JOIN secretarias s ON m.secretaria_id = s.id
       LEFT JOIN users u ON m.author_id = u.id
-      LEFT JOIN matter_types mt ON m.matter_type_id = mt.id
       WHERE em.edition_id = $1
       ORDER BY em.display_order ASC
     `, [id]);
     
     const matters = mattersResult.rows;
     
-    // Buscar anexos de cada matéria
+    // Buscar anexos de cada matéria - CORREÇÃO: usar mime_type em vez de file_type
     const mattersWithAttachments = await Promise.all(
       matters.map(async (matter) => {
         const attachmentsResult = await db.query(`
-          SELECT id, filename, file_url, file_size, file_type, original_name
+          SELECT id, filename, file_url, file_size, mime_type, original_name
           FROM attachments
           WHERE matter_id = $1
         `, [matter.id]);
@@ -1200,10 +1222,9 @@ editions.post('/:id/publish', requireRole('admin', 'semad'), async (c) => {
         UPDATE matters 
         SET status = 'published',
             published_at = NOW(),
-            pdf_url = $1,
             updated_at = NOW()
-        WHERE id = $2
-      `, [pdfResult.url, matter.id]);
+        WHERE id = $1
+      `, [matter.id]);
     }
     
     // Log de auditoria

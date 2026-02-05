@@ -101,6 +101,7 @@ users.get('/:id', async (c) => {
  * POST /api/users
  * Cria um novo usuário
  */
+// POST /api/users
 users.post('/', async (c) => {
   try {
     const admin = c.get('user');
@@ -123,6 +124,29 @@ users.post('/', async (c) => {
       return c.json({ error: 'Role inválida' }, 400);
     }
     
+    // 🔍 CORREÇÃO: Validar secretaria_id baseado no role
+    if (role === 'secretaria' && (!secretaria_id || secretaria_id === '')) {
+      return c.json({ 
+        error: 'Secretaria é obrigatória para usuários do tipo "Secretaria"' 
+      }, 400);
+    }
+    
+    // 🔍 CORREÇÃO CRÍTICA: Converter secretaria_id corretamente
+    let finalSecretariaId: number | null = null;
+    
+    if (secretaria_id && secretaria_id !== '') {
+      // Converter para número se fornecido
+      const parsedId = parseInt(String(secretaria_id));
+      if (!isNaN(parsedId)) {
+        finalSecretariaId = parsedId;
+      }
+    }
+    
+    // Para usuários não-secretaria, garantir que seja null
+    if (role !== 'secretaria') {
+      finalSecretariaId = null;
+    }
+    
     // Verificar se email já existe
     const existingResult = await db.query(
       'SELECT id FROM users WHERE email = $1',
@@ -136,12 +160,17 @@ users.post('/', async (c) => {
     // Hash da senha
     const passwordHash = await hashPassword(password);
     
-    // Criar usuário
+    // 🔍 CORREÇÃO: Log dos valores que serão inseridos
+    console.log('Valores para INSERT:', {
+      name, email, cpf: cpf || null, role, secretaria_id: finalSecretariaId
+    });
+    
+    // Criar usuário - CORREÇÃO NO PARÂMETRO $6
     const result = await db.query(`
       INSERT INTO users (
         name, email, cpf, password_hash, role, secretaria_id, 
         active, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, true, NOW(), NOW())
+      ) VALUES ($1, $2, $3, $4, $5, $6, 1, NOW(), NOW())
       RETURNING id, name, email, role, secretaria_id
     `, [
       name, 
@@ -149,7 +178,7 @@ users.post('/', async (c) => {
       cpf || null, 
       passwordHash, 
       role, 
-      secretaria_id || null
+      finalSecretariaId  // Agora pode ser number ou null
     ]);
     
     const newUser = result.rows[0];
@@ -168,7 +197,7 @@ users.post('/', async (c) => {
       'user',
       newUser.id,
       'create',
-      JSON.stringify({ name, email, role, secretaria_id }),
+      JSON.stringify({ name, email, role, secretaria_id: finalSecretariaId }),
       ipAddress,
       userAgent
     ]);
@@ -179,8 +208,35 @@ users.post('/', async (c) => {
     }, 201);
     
   } catch (error: any) {
-    console.error('Error creating user:', error);
-    return c.json({ error: 'Erro ao criar usuário', details: error.message }, 500);
+    console.error('❌ Error creating user:', error);
+    console.error('❌ Error details:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint,
+      position: error.position
+    });
+    
+    // Adicionar mais detalhes específicos
+    if (error.code === '23503') { // Violação de chave estrangeira
+      return c.json({ 
+        error: 'Erro de referência: A secretaria selecionada não existe',
+        details: error.message 
+      }, 400);
+    }
+    if (error.code === '23505') { // Violação de unicidade
+      return c.json({ 
+        error: 'Email já cadastrado no sistema',
+        details: error.message 
+      }, 400);
+    }
+    
+    return c.json({ 
+      error: 'Erro ao criar usuário', 
+      details: error.message,
+      code: error.code,
+      hint: error.hint
+    }, 500);
   }
 });
 
@@ -270,7 +326,7 @@ users.put('/:id', async (c) => {
       cpf || null, 
       role, 
       finalSecretariaId, 
-      finalActive, 
+      finalActive ? 1 : 0, 
       id
     ]);
     
