@@ -578,12 +578,6 @@ app.get('/', (c) => {
                 <div id="loginError" class="mt-4 p-3 bg-red-50 border border-red-200 text-red-600 text-sm text-center rounded-lg hidden"></div>
                 <div id="loginSuccess" class="mt-4 p-3 bg-green-50 border border-green-200 text-green-600 text-sm text-center rounded-lg hidden"></div>
                 
-                <div class="mt-8 text-center text-sm text-gray-600 bg-gray-50 rounded-lg p-4">
-                    <p class="font-semibold text-gray-700 mb-2">Credenciais de teste:</p>
-                    <p class="mt-1"><strong>Admin:</strong> admin@municipio.gov.br / admin123</p>
-                    <p><strong>SEMAD:</strong> coordenador@semad.gov.br / semad123</p>
-                    <p><strong>Secretaria:</strong> joao.silva@semed.gov.br / secretaria123</p>
-                </div>
             </div>
             
             <!-- Footer with Prefeitura Link -->
