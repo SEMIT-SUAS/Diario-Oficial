@@ -1,5 +1,6 @@
 // ====================================
 // DOM - Frontend Application Logic - COMPLETO
+// VERSÃO CORRIGIDA - Menu Secretaria funcionando
 // ====================================
 
 // Global state
@@ -128,9 +129,9 @@ function logout() {
     localStorage.removeItem('dom_token');
     
     // Limpar menus para evitar bug de persistência
-    document.getElementById('secretariaMenu').classList.add('hidden');
-    document.getElementById('semadMenu').classList.add('hidden');
-    document.getElementById('adminMenu').classList.add('hidden');
+    document.getElementById('secretariaMenu')?.classList.add('hidden');
+    document.getElementById('semadMenu')?.classList.add('hidden');
+    document.getElementById('adminMenu')?.classList.add('hidden');
     
     showLogin();
 }
@@ -141,7 +142,7 @@ function showLogin() {
     document.getElementById('dashboardScreen').classList.add('hidden');
 }
 
-// Show dashboard
+// Show dashboard - FUNÇÃO CORRIGIDA
 async function showDashboard() {
     try {
         // Load user data
@@ -150,27 +151,57 @@ async function showDashboard() {
             state.user = data;
         }
         
+        console.log('🟢 showDashboard chamado');
+        console.log('👤 Usuário:', state.user);
+        console.log('🎭 Role do usuário:', state.user.role);
+        
         // Limpar todos os menus primeiro (corrige bug de persistência)
-        document.getElementById('secretariaMenu').classList.add('hidden');
-        document.getElementById('semadMenu').classList.add('hidden');
-        document.getElementById('semadAdminMenu').classList.add('hidden');
-        document.getElementById('adminMenu').classList.add('hidden');
+        const secretariaMenu = document.getElementById('secretariaMenu');
+        const semadMenu = document.getElementById('semadMenu');
+        const semadAdminMenu = document.getElementById('semadAdminMenu');
+        const adminMenu = document.getElementById('adminMenu');
+        
+        console.log('🔍 Elementos encontrados:');
+        console.log('- secretariaMenu:', secretariaMenu ? '✅ Existe' : '❌ Não existe');
+        console.log('- semadMenu:', semadMenu ? '✅ Existe' : '❌ Não existe');
+        console.log('- semadAdminMenu:', semadAdminMenu ? '✅ Existe' : '❌ Não existe');
+        console.log('- adminMenu:', adminMenu ? '✅ Existe' : '❌ Não existe');
+        
+        // Adicionar hidden a todos
+        [secretariaMenu, semadMenu, semadAdminMenu, adminMenu].forEach(menu => {
+            if (menu) menu.classList.add('hidden');
+        });
         
         // Update UI with user info
         document.getElementById('userName').textContent = state.user.name;
         document.getElementById('userRole').textContent = getRoleName(state.user.role);
         
-        // Show/hide menus based on role
+        console.log('🎯 Role detectado para menu:', state.user.role);
+        
+        // Show/hide menus based on role - CORRIGIDO
         if (state.user.role === 'secretaria') {
-            document.getElementById('secretariaMenu').classList.remove('hidden');
+            console.log('🔄 Mostrando menu Secretaria');
+            if (secretariaMenu) {
+                secretariaMenu.classList.remove('hidden');
+                console.log('✅ Menu Secretaria REMOVIDO hidden');
+            }
         }
+        
         if (state.user.role === 'semad' || state.user.role === 'admin') {
-            document.getElementById('semadMenu').classList.remove('hidden');
-            document.getElementById('semadAdminMenu').classList.remove('hidden');
+            console.log('🔄 Mostrando menu SEMAD');
+            if (semadMenu) semadMenu.classList.remove('hidden');
+            if (semadAdminMenu) semadAdminMenu.classList.remove('hidden');
         }
+        
         if (state.user.role === 'admin') {
-            document.getElementById('adminMenu').classList.remove('hidden');
+            console.log('🔄 Mostrando menu Admin');
+            if (adminMenu) adminMenu.classList.remove('hidden');
         }
+        
+        console.log('📊 Estado final dos menus:');
+        console.log('- secretariaMenu tem hidden?', secretariaMenu?.classList.contains('hidden'));
+        console.log('- semadMenu tem hidden?', semadMenu?.classList.contains('hidden'));
+        console.log('- adminMenu tem hidden?', adminMenu?.classList.contains('hidden'));
         
         // Load matter types
         await loadMatterTypes();
@@ -184,6 +215,9 @@ async function showDashboard() {
         
         // Load dashboard view
         loadView('dashboard');
+        
+        // 🚨 PATCH: Forçar verificação após 500ms para garantir
+        setTimeout(forceMenuVisibilityCheck, 500);
         
     } catch (error) {
         console.error('Error loading dashboard:', error);
@@ -242,29 +276,37 @@ function getRoleName(role) {
         admin: 'Administrador',
         semad: 'SEMAD',
         secretaria: 'Secretaria',
-        publico: 'Público'
+        publicador: 'Publicador'
     };
     return roles[role] || role;
 }
 
 // ====================================
-// NAVIGATION
+// NAVIGATION - FUNÇÃO CORRIGIDA
 // ====================================
 
-document.querySelectorAll('.nav-link').forEach(link => {
-    link.addEventListener('click', (e) => {
-        e.preventDefault();
-        const view = e.currentTarget.dataset.view;
-        loadView(view);
+// Atualizar event listeners para navegação
+function setupNavigationListeners() {
+    document.querySelectorAll('.nav-link').forEach(link => {
+        // Remover listeners antigos para evitar duplicação
+        link.removeEventListener('click', handleNavLinkClick);
+        // Adicionar novo listener
+        link.addEventListener('click', handleNavLinkClick);
     });
-});
+}
+
+function handleNavLinkClick(e) {
+    e.preventDefault();
+    const view = e.currentTarget.dataset.view;
+    loadView(view);
+}
 
 // Toggle sidebar on mobile
 document.getElementById('toggleSidebar')?.addEventListener('click', () => {
     document.getElementById('sidebar').classList.toggle('hidden');
 });
 
-// Load view
+// Load view - FUNÇÃO ATUALIZADA
 async function loadView(view) {
     state.currentView = view;
     const content = document.getElementById('mainContent');
@@ -331,6 +373,9 @@ async function loadView(view) {
         console.error('Error loading view:', error);
         content.innerHTML = `<p class="text-red-600">Erro ao carregar página: ${error.message}</p>`;
     }
+    
+    // 🚨 PATCH: Verificar visibilidade do menu após carregar view
+    setTimeout(forceMenuVisibilityCheck, 100);
 }
 
 // ====================================
@@ -478,14 +523,14 @@ async function loadMyMatters(container) {
                     <input 
                         type="text" 
                         id="filterMattersText"
-                        class="px-4 py-2 border border-gray-300 rounded-lg"
+                        class="px-4 py-3 border border-gray-300 rounded-lg"
                         placeholder="Buscar por título..."
                         onkeyup="filterMattersList()"
                     >
                     
                     <select 
                         id="filterMattersSecretaria"
-                        class="px-4 py-2 border border-gray-300 rounded-lg"
+                        class="px-4 py-3 border border-gray-300 rounded-lg"
                         onchange="filterMattersList()"
                     >
                         <option value="">Todas as secretarias</option>
@@ -493,7 +538,7 @@ async function loadMyMatters(container) {
                     
                     <select 
                         id="filterMattersType"
-                        class="px-4 py-2 border border-gray-300 rounded-lg"
+                        class="px-4 py-3 border border-gray-300 rounded-lg"
                         onchange="filterMattersList()"
                     >
                         <option value="">Todos os tipos</option>
@@ -502,7 +547,7 @@ async function loadMyMatters(container) {
                     
                     <select 
                         id="filterMattersStatus"
-                        class="px-4 py-2 border border-gray-300 rounded-lg"
+                        class="px-4 py-3 border border-gray-300 rounded-lg"
                         onchange="filterMattersList()"
                     >
                         <option value="">Todos os status</option>
@@ -517,7 +562,7 @@ async function loadMyMatters(container) {
                     <input 
                         type="date" 
                         id="filterMattersDate"
-                        class="px-4 py-2 border border-gray-300 rounded-lg"
+                        class="px-4 py-3 border border-gray-300 rounded-lg"
                         onchange="filterMattersList()"
                     >
                 </div>
@@ -3676,7 +3721,7 @@ async function viewEdition(id) {
                                 <button onclick="addMatterToEdition(${data.id})" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
                                     <i class="fas fa-plus mr-2"></i>Adicionar Matéria
                                 </button>
-                                <button onclick="publishEdition(${data.id})" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg">
+                                <button onclick="publishEdition(${data.id})" class="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg">
                                     <i class="fas fa-rocket mr-2"></i>Publicar Edição
                                 </button>
                             </div>
@@ -4377,11 +4422,140 @@ async function exportEditionsXLS() {
 }
 
 // ====================================
-// INITIALIZE APP
+// 🚨 FUNÇÕES CORRETIVAS PARA MENU SECRETARIA
+// ====================================
+
+// Função para verificar e forçar visibilidade do menu
+function forceMenuVisibilityCheck() {
+    console.log('🔍 Verificando visibilidade dos menus...');
+    
+    const secretariaMenu = document.getElementById('secretariaMenu');
+    const semadMenu = document.getElementById('semadMenu');
+    const adminMenu = document.getElementById('adminMenu');
+    const userRoleElement = document.getElementById('userRole');
+    
+    if (!userRoleElement) {
+        console.log('❌ Elemento userRole não encontrado');
+        return;
+    }
+    
+    const userRoleText = userRoleElement.textContent.toLowerCase();
+    
+    // 🚨 CORREÇÃO ESPECÍFICA PARA SECRETARIA
+    if (userRoleText.includes('secretaria') && secretariaMenu) {
+        console.log('🚨 CORREÇÃO APLICADA: Mostrando menu Secretaria');
+        secretariaMenu.classList.remove('hidden');
+    }
+    
+    // Verificar outros menus também
+    if (userRoleText.includes('semad') && semadMenu) {
+        semadMenu.classList.remove('hidden');
+    }
+    
+    if (userRoleText.includes('admin') && adminMenu) {
+        adminMenu.classList.remove('hidden');
+    }
+    
+    // Debug: verificar estado atual
+    console.log('📊 Estado após correção:');
+    console.log('- secretariaMenu hidden?', secretariaMenu?.classList.contains('hidden'));
+    console.log('- semadMenu hidden?', semadMenu?.classList.contains('hidden'));
+    console.log('- adminMenu hidden?', adminMenu?.classList.contains('hidden'));
+}
+
+// PATCH: Monitorar DOM e corrigir menu periodicamente
+function startMenuMonitor() {
+    console.log('🚀 Iniciando monitor de menu...');
+    
+    // Executar verificação inicial após 1 segundo
+    setTimeout(forceMenuVisibilityCheck, 1000);
+    
+    // Executar periodicamente a cada 3 segundos (apenas durante 30 segundos)
+    let attempts = 0;
+    const maxAttempts = 10;
+    
+    const intervalId = setInterval(() => {
+        attempts++;
+        console.log(`🔄 Verificação de menu #${attempts}`);
+        forceMenuVisibilityCheck();
+        
+        if (attempts >= maxAttempts) {
+            console.log('✅ Monitor de menu concluído');
+            clearInterval(intervalId);
+        }
+    }, 3000);
+    
+    // Armazenar interval ID para limpeza no logout
+    window.menuMonitorInterval = intervalId;
+}
+
+// Atualizar função logout para limpar interval
+const originalLogoutFunction = window.logout;
+window.logout = function() {
+    // Limpar interval do monitor
+    if (window.menuMonitorInterval) {
+        clearInterval(window.menuMonitorInterval);
+        window.menuMonitorInterval = null;
+    }
+    
+    // Chamar função original
+    originalLogoutFunction();
+};
+
+// ====================================
+// INITIALIZE APP - ATUALIZADO
 // ====================================
 
 if (state.token) {
-    showDashboard();
+    console.log('🎬 Inicializando app com token existente');
+    showDashboard().then(() => {
+        // Iniciar monitor após carregar dashboard
+        setTimeout(startMenuMonitor, 1500);
+    });
 } else {
+    console.log('🔒 Nenhum token encontrado, mostrando login');
     showLogin();
 }
+
+// Configurar listeners de navegação quando o DOM estiver pronto
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('📄 DOM completamente carregado');
+    
+    // Configurar navegação
+    setupNavigationListeners();
+    
+    // Se já estivermos na dashboard, verificar menus imediatamente
+    const dashboardScreen = document.getElementById('dashboardScreen');
+    if (dashboardScreen && !dashboardScreen.classList.contains('hidden')) {
+        console.log('🏠 Dashboard já visível - verificando menus');
+        forceMenuVisibilityCheck();
+        startMenuMonitor();
+    }
+});
+
+// ====================================
+// FUNÇÕES GLOBAIS EXPORTADAS (para uso no HTML)
+// ====================================
+
+// Exportar funções necessárias para uso em atributos onclick no HTML
+window.loadView = loadView;
+window.viewMatterDetails = viewMatterDetails;
+window.editMatter = editMatter;
+window.deleteMatter = deleteMatter;
+window.submitMatterForReview = submitMatterForReview;
+window.cancelSubmission = cancelSubmission;
+window.reviewMatter = reviewMatter;
+window.approveMatter = approveMatter;
+window.rejectMatter = rejectMatter;
+window.viewPublicMatter = viewPublicMatter;
+window.verifyEdition = verifyEdition;
+window.verifyMatterSignature = verifyMatterSignature;
+window.exportMattersCSV = exportMattersCSV;
+window.exportMattersXLS = exportMattersXLS;
+window.exportEditionsCSV = exportEditionsCSV;
+window.exportEditionsXLS = exportEditionsXLS;
+window.filterMattersList = filterMattersList;
+window.clearMattersFilters = clearMattersFilters;
+window.filterSemadList = filterSemadList;
+window.clearSemadFilters = clearSemadFilters;
+window.forceMenuVisibilityCheck = forceMenuVisibilityCheck;

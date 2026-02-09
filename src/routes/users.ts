@@ -139,8 +139,8 @@ users.post('/', async (c) => {
     const roleMapping: Record<string, string> = {
       'admin': 'admin',
       'semad': 'semad',
-      'secretaria': 'author',       // Mapear 'secretaria' para 'author'
-      'publico': 'publisher'        // Mapear 'publico' para 'publisher'
+      'secretaria': 'secretaria',       // Mapear 'secretaria' para 'author'
+      'publico': 'publicador'        // Mapear 'publico' para 'publisher'
     };
     
     // Usar mapeamento ou usar direto se já estiver correto
