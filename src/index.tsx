@@ -605,7 +605,7 @@ app.get('/', (c) => {
                 </div>
                 
                 <p class="text-white text-sm opacity-80">
-                    © 2025 Prefeitura Municipal de São Luís - MA
+                    © 2026 Prefeitura Municipal de São Luís - MA
                 </p>
             </div>
         </div>

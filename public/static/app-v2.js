@@ -783,13 +783,27 @@ function clearSemadFilters() {
 }
 
 // View matter details
+// View matter details - FUNÇÃO CORRIGIDA
 async function viewMatterDetails(id) {
     const content = document.getElementById('mainContent');
     
     try {
         const { data } = await api.get(`/matters/${id}`);
-        const matter = data.matter;
         
+        // 🔍 DEBUG: Verificar estrutura dos dados recebidos
+        console.log('📦 Dados recebidos da API:', data);
+        
+        // A API retorna o objeto da matéria diretamente, não dentro de { matter }
+        const matter = data;
+        
+        if (!matter || !matter.id) {
+            console.error('❌ Dados inválidos recebidos:', data);
+            throw new Error('Dados da matéria inválidos');
+        }
+        
+        console.log('✅ Matéria carregada:', matter.title);
+        
+        // Restante do código permanece o mesmo...
         content.innerHTML = `
             <div class="mb-6">
                 <button 
@@ -804,7 +818,7 @@ async function viewMatterDetails(id) {
                 <div class="flex justify-between items-start mb-6">
                     <div>
                         <h2 class="text-2xl font-bold text-gray-800">${matter.title}</h2>
-                        <p class="text-gray-600 mt-2">${matter.matter_type || 'Sem tipo'}</p>
+                        <p class="text-gray-600 mt-2">${matter.matter_type_name || matter.matter_type || 'Sem tipo'}</p>
                     </div>
                     <span class="px-4 py-2 rounded-full text-sm font-medium ${getStatusColor(matter.status)}">
                         ${getStatusName(matter.status)}
@@ -834,7 +848,7 @@ async function viewMatterDetails(id) {
                     </div>
                     <div>
                         <p class="text-sm text-gray-500">Versão</p>
-                        <p class="font-medium">v${matter.version}</p>
+                        <p class="font-medium">v${matter.version || 1}</p>
                     </div>
                     ${matter.publication_date ? `
                         <div>
@@ -932,7 +946,7 @@ async function viewMatterDetails(id) {
                         </button>
                     ` : ''}
                     
-                    ${matter.status === 'submitted' || matter.status === 'under_review' ? `
+                    ${(matter.status === 'submitted' || matter.status === 'under_review') ? `
                         <button 
                             onclick="cancelSubmission(${matter.id})"
                             class="bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded-lg"
@@ -947,19 +961,34 @@ async function viewMatterDetails(id) {
         // Carregar anexos
         loadMatterAttachments(id);
         
-    } catch (error) {
-        content.innerHTML = `<p class="text-red-600">Erro ao carregar detalhes: ${error.message}</p>`;
+    } catch (err) {
+        console.error('❌ Erro completo ao carregar detalhes:', err);
+        content.innerHTML = `
+            <div class="bg-red-50 border border-red-200 rounded-lg p-6">
+                <h3 class="text-lg font-bold text-red-800 mb-2">
+                    <i class="fas fa-exclamation-triangle mr-2"></i>Erro ao carregar matéria
+                </h3>
+                <p class="text-red-700">${err.message}</p>
+                <button onclick="loadView('myMatters')" class="mt-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                    <i class="fas fa-arrow-left mr-2"></i>Voltar para lista
+                </button>
+            </div>
+        `;
     }
 }
 
 // Carregar anexos de uma matéria
+// Carregar anexos de uma matéria - FUNÇÃO CORRIGIDA
 async function loadMatterAttachments(matterId) {
     const container = document.getElementById('attachmentsContainer');
     if (!container) return;
     
     try {
         const { data } = await api.get(`/matters/${matterId}/attachments`);
-        const attachments = data.attachments || [];
+        console.log('📎 Dados de anexos:', data);
+        
+        // Verificar se os anexos estão diretamente no data ou em data.attachments
+        const attachments = Array.isArray(data) ? data : (data.attachments || []);
         
         if (attachments.length === 0) {
             container.innerHTML = '';
@@ -986,7 +1015,7 @@ async function loadMatterAttachments(matterId) {
                                 </div>
                             </div>
                             <button 
-                                onclick="alert('Download de anexos ainda não implementado')"
+                                onclick="downloadAttachment(${att.id}, '${att.original_name || att.filename}')"
                                 class="text-blue-600 hover:text-blue-800"
                                 title="Download"
                             >
@@ -1000,6 +1029,31 @@ async function loadMatterAttachments(matterId) {
     } catch (error) {
         console.error('Erro ao carregar anexos:', error);
         container.innerHTML = '';
+    }
+}
+
+// Função auxiliar para download de anexo
+async function downloadAttachment(attachmentId, filename) {
+    try {
+        const response = await fetch(`/api/attachments/${attachmentId}/download`, {
+            headers: {
+                'Authorization': `Bearer ${state.token}`
+            }
+        });
+        
+        if (!response.ok) throw new Error('Erro ao baixar arquivo');
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    } catch (error) {
+        alert('Erro ao baixar anexo: ' + error.message);
     }
 }
 
@@ -1422,7 +1476,10 @@ function removeAttachment(index) {
 }
 
 // Get file icon based on extension
+// Get file icon based on extension - FUNÇÃO COMPLETA
 function getFileIcon(filename) {
+    if (!filename) return 'alt';
+    
     const ext = filename.split('.').pop().toLowerCase();
     const icons = {
         'pdf': 'pdf',
@@ -1432,7 +1489,12 @@ function getFileIcon(filename) {
         'xlsx': 'excel',
         'jpg': 'image',
         'jpeg': 'image',
-        'png': 'image'
+        'png': 'image',
+        'gif': 'image',
+        'txt': 'alt',
+        'zip': 'archive',
+        'rar': 'archive',
+        '7z': 'archive'
     };
     return icons[ext] || 'alt';
 }
@@ -1480,23 +1542,24 @@ async function submitMatterForReview(id) {
 }
 
 async function cancelSubmission(id) {
-    const reason = prompt('Digite o motivo do cancelamento:');
+  const reason = prompt('Digite o motivo do cancelamento:');
+  
+  if (!reason || reason.trim() === '') {
+    alert('O motivo do cancelamento é obrigatório!');
+    return;
+  }
+  
+  try {
+    // Usar a rota /cancel que criamos
+    await api.post(`/matters/${id}/cancel`, {
+      cancelation_reason: reason
+    });
     
-    if (!reason || reason.trim() === '') {
-        alert('O motivo do cancelamento é obrigatório!');
-        return;
-    }
-    
-    try {
-        await api.post(`/matters/${id}/cancel`, {
-            cancelation_reason: reason
-        });
-        
-        alert('Envio cancelado com sucesso!');
-        loadView('myMatters');
-    } catch (error) {
-        alert('Erro ao cancelar envio: ' + (error.response?.data?.error || error.message));
-    }
+    alert('Envio cancelado com sucesso!');
+    loadView('myMatters');
+  } catch (error) {
+    alert('Erro ao cancelar envio: ' + (error.response?.data?.error || error.message));
+  }
 }
 
 // ====================================
@@ -2056,54 +2119,56 @@ function getRoleBadgeColor(role) {
     return colors[role] || 'bg-gray-100 text-gray-800';
 }
 
-function showNewUserModal() {
+async function showNewUserModal() {
+    // Buscar secretarias para o dropdown
+    const { data: secretariasData } = await api.get('/secretarias');
+    const secretarias = secretariasData.secretarias || [];
+    
+    const secretariasOptions = secretarias.map(s => 
+        `<option value="${s.id}">${s.acronym} - ${s.name}</option>`
+    ).join('');
+    
     const modal = document.createElement('div');
     modal.innerHTML = `
         <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" id="userModal">
             <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
                 <h3 class="text-xl font-bold text-gray-800 mb-4">Novo Usuário</h3>
                 
-                <form id="newUserForm" class="space-y-4">
+                <form id="userForm" class="space-y-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Nome *</label>
-                        <input type="text" id="newUserName" required 
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                        <input type="text" id="newUserName" required class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Email *</label>
-                        <input type="email" id="newUserEmail" required 
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                        <input type="email" id="newUserEmail" required class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">CPF (opcional)</label>
-                        <input type="text" id="newUserCpf" 
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="000.000.000-00">
+                        <input type="text" id="newUserCpf" class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="000.000.000-00">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Senha *</label>
-                        <input type="password" id="newUserPassword" required minlength="6" 
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="Mínimo 6 caracteres">
+                        <input type="password" id="newUserPassword" required minlength="6" class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="Mínimo 6 caracteres">
                     </div>
                     
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Perfil *</label>
-                        <select id="newUserRole" required 
-                                class="w-full px-4 py-2 border border-gray-300 rounded-lg" onchange="handleNewUserRoleChange()">
+                        <select id="newUserRole" required class="w-full px-4 py-2 border border-gray-300 rounded-lg" onchange="toggleSecretariaField()">
                             <option value="">Selecione...</option>
                             <option value="admin">Administrador</option>
-                            <option value="semad">SEMAD (Coordenador)</option>
-                            <option value="secretaria">Autor (Secretaria)</option>
-                            <option value="publicador">Publicador</option>
+                            <option value="semad">SEMAD</option>
+                            <option value="secretaria">Secretaria</option>
+                            <option value="publico">Público</option>
                         </select>
                     </div>
                     
                     <div id="newSecretariaField" style="display:none;">
                         <label class="block text-sm font-medium text-gray-700 mb-1">Secretaria *</label>
-                        <select id="newUserSecretaria" 
-                                class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                        <select id="newUserSecretaria" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                             <option value="">Selecione...</option>
                             ${secretariasOptions}
                         </select>
@@ -2124,8 +2189,8 @@ function showNewUserModal() {
     
     document.body.appendChild(modal);
     
-    // Função para mostrar/esconder campo secretaria
-    window.handleNewUserRoleChange = function() {
+    // Toggle secretaria field based on role
+    window.toggleSecretariaField = function() {
         const role = document.getElementById('newUserRole').value;
         const secretariaField = document.getElementById('newSecretariaField');
         const secretariaSelect = document.getElementById('newUserSecretaria');
@@ -2140,32 +2205,49 @@ function showNewUserModal() {
         }
     };
     
-    document.getElementById('newUserForm').addEventListener('submit', async (e) => {
+    document.getElementById('userForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         
-        const name = document.getElementById('newUserName').value.trim();
-        const email = document.getElementById('newUserEmail').value.trim();
-        const cpf = document.getElementById('newUserCpf').value.trim();
-        const password = document.getElementById('newUserPassword').value;
-        const role = document.getElementById('newUserRole').value;
-        const secretariaId = document.getElementById('newUserSecretaria').value;
+        const nameInput = document.getElementById('newUserName');
+        const emailInput = document.getElementById('newUserEmail');
+        const cpfInput = document.getElementById('newUserCpf');
+        const passwordInput = document.getElementById('newUserPassword');
+        const roleInput = document.getElementById('newUserRole');
+        const secretariaInput = document.getElementById('newUserSecretaria');
         
-        if (!name || !email || !password || !role) {
-            alert('Por favor, preencha todos os campos obrigatórios');
+        console.log('Form elements:', {
+            nameInput, emailInput, passwordInput, roleInput, secretariaInput
+        });
+        
+        const role = roleInput?.value || '';
+        const secretariaId = secretariaInput?.value || '';
+        
+        // Validação adicional
+        if (role === 'secretaria' && !secretariaId) {
+            alert('Por favor, selecione uma secretaria para usuários do tipo Secretaria');
             return;
         }
         
-        // Validação para perfil Secretaria
-        if (role === 'secretaria' && !secretariaId) {
-            alert('Por favor, selecione uma secretaria para usuários do tipo "Autor (Secretaria)"');
+        const nameValue = nameInput?.value?.trim() || '';
+        const emailValue = emailInput?.value?.trim() || '';
+        const cpfValue = cpfInput?.value?.trim() || '';
+        const passwordValue = passwordInput?.value || '';
+        
+        console.log('Form values:', {
+            nameValue, emailValue, passwordValue, role, secretariaId
+        });
+        
+        if (!nameValue || !emailValue || !passwordValue) {
+            alert('Nome, email e senha são obrigatórios');
+            console.error('Validation failed:', { nameValue, emailValue, passwordValue });
             return;
         }
         
         const userData = {
-            name: name,
-            email: email,
-            cpf: cpf || null,
-            password: password,
+            name: nameValue.trim(),
+            email: emailValue.trim(),
+            cpf: (cpfValue && cpfValue.trim()) || null,
+            password: passwordValue,
             role: role,
             secretaria_id: secretariaId ? parseInt(secretariaId) : null
         };
@@ -2188,17 +2270,15 @@ function closeUserModal() {
 async function editUser(id) {
     try {
         console.log('✅ FUNÇÃO EDITUSER DO APP-V2.JS CARREGADA!');
+        alert('✅ Usando código NOVO (app-v2.js) - Nome e perfil serão enviados!');
         
-        // Buscar secretarias e dados do usuário
-        const [{ data: secretariasData }, { data: userData }] = await Promise.all([
-            api.get('/secretarias'),
-            api.get(`/users/${id}`)
-        ]);
-        
+        // Buscar secretarias para o select
+        const { data: secretariasData } = await api.get('/secretarias');
         const secretarias = secretariasData.secretarias || [];
-        const user = userData.user;
         
-        // Criar modal
+        const { data } = await api.get(`/users/${id}`);
+        const user = data.user;
+        
         const modal = document.createElement('div');
         modal.innerHTML = `
             <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" id="userModal">
@@ -2208,46 +2288,38 @@ async function editUser(id) {
                     </div>
                     <h3 class="text-xl font-bold text-gray-800 mb-4">Editar Usuário</h3>
                     
-                    <form id="userEditForm" class="space-y-4">
-                        <input type="hidden" id="editUserId" value="${id}">
-                        
+                    <form id="userForm" class="space-y-4">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Nome *</label>
-                            <input type="text" id="editUserName" value="${user.name}" required 
-                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Nome</label>
+                            <input type="text" id="userName" value="${user.name}" required class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                         </div>
                         
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Email *</label>
-                            <input type="email" id="editUserEmail" value="${user.email}" required 
-                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                            <input type="email" id="userEmail" value="${user.email}" required class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                         </div>
                         
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">CPF</label>
-                            <input type="text" id="editUserCpf" value="${user.cpf || ''}" 
-                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="000.000.000-00">
+                            <input type="text" id="userCpf" value="${user.cpf || ''}" class="w-full px-4 py-2 border border-gray-300 rounded-lg" placeholder="000.000.000-00">
                         </div>
                         
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Perfil *</label>
-                            <select id="editUserRole" required 
-                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg" onchange="handleRoleChange()">
-                                <option value="">Selecione...</option>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Perfil</label>
+                            <select id="userRole" required class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                                 <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Administrador</option>
                                 <option value="semad" ${user.role === 'semad' ? 'selected' : ''}>SEMAD (Coordenador)</option>
-                                <option value="secretaria" ${user.role === 'secretaria' ? 'selected' : ''}>Autor (Secretaria)</option>
-                                <option value="publicador" ${user.role === 'publicador' ? 'selected' : ''}>Publicador</option>
+                                <option value="secretaria" ${user.role === 'secretaria' ? 'selected' : ''}>Secretaria</option>
+                                <option value="publico" ${user.role === 'publico' ? 'selected' : ''}>Público</option>
                             </select>
                         </div>
                         
-                        <div id="editSecretariaFieldContainer" style="display: ${user.role === 'secretaria' || user.secretaria_id ? 'block' : 'none'};">
+                        <div id="secretariaFieldContainer">
                             <label class="block text-sm font-medium text-gray-700 mb-1">
-                                Secretaria ${user.role === 'secretaria' ? '<span class="text-red-500">*</span>' : ''}
+                                Secretaria 
+                                ${user.role === 'secretaria' ? '<span class="text-red-500">*</span>' : ''}
                             </label>
-                            <select id="editUserSecretaria" 
-                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg"
-                                    ${user.role === 'secretaria' ? 'required' : ''}>
+                            <select id="userSecretaria" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
                                 <option value="">-- Nenhuma --</option>
                                 ${secretarias.map(s => `
                                     <option value="${s.id}" ${user.secretaria_id === s.id ? 'selected' : ''}>
@@ -2255,14 +2327,14 @@ async function editUser(id) {
                                     </option>
                                 `).join('')}
                             </select>
-                            <p id="editSecretariaHelp" class="text-xs ${user.role === 'secretaria' ? 'text-red-600' : 'text-gray-500'} mt-1">
+                            <p class="text-xs text-gray-500 mt-1" id="secretariaHelp">
                                 ${user.role === 'secretaria' ? '⚠️ Obrigatório para perfil "Secretaria"' : 'Opcional para este perfil'}
                             </p>
                         </div>
                         
                         <div class="flex items-center">
-                            <input type="checkbox" id="editUserActive" ${user.active ? 'checked' : ''} class="mr-2">
-                            <label for="editUserActive" class="text-sm font-medium text-gray-700">Usuário Ativo</label>
+                            <input type="checkbox" id="userActive" ${user.active ? 'checked' : ''} class="mr-2">
+                            <label for="userActive" class="text-sm font-medium text-gray-700">Usuário Ativo</label>
                         </div>
                         
                         <div class="flex justify-end space-x-2 mt-6">
@@ -2270,7 +2342,7 @@ async function editUser(id) {
                                 Cancelar
                             </button>
                             <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
-                                Salvar Alterações
+                                Salvar
                             </button>
                         </div>
                     </form>
@@ -2280,90 +2352,123 @@ async function editUser(id) {
         
         document.body.appendChild(modal);
         
-        // Adicionar evento para mostrar/esconder campo secretaria
-        window.handleRoleChange = function() {
-            const role = document.getElementById('editUserRole').value;
-            const secretariaField = document.getElementById('editSecretariaFieldContainer');
-            const secretariaSelect = document.getElementById('editUserSecretaria');
-            const secretariaHelp = document.getElementById('editSecretariaHelp');
-            const secretariaLabel = secretariaField.querySelector('label');
-            
-            if (role === 'secretaria') {
+        // Mostrar/esconder campo secretaria baseado no perfil
+        const roleSelect = document.getElementById('userRole');
+        const secretariaField = document.getElementById('secretariaFieldContainer');
+        const secretariaSelect = document.getElementById('userSecretaria');
+        const secretariaHelp = document.getElementById('secretariaHelp');
+        const secretariaLabel = secretariaField.querySelector('label');
+        
+        function toggleSecretariaField() {
+            const role = roleSelect.value;
+            // Mostrar campo se: perfil é secretaria/semad OU usuário já tem secretaria associada
+            if (role === 'secretaria' || role === 'semad' || user.secretaria_id) {
                 secretariaField.style.display = 'block';
-                secretariaSelect.required = true;
-                secretariaLabel.innerHTML = 'Secretaria <span class="text-red-500">*</span>';
-                secretariaHelp.innerHTML = '⚠️ Obrigatório para perfil "Autor (Secretaria)"';
-                secretariaHelp.className = 'text-xs text-red-600 mt-1';
+                
+                // Tornar obrigatório apenas para perfil "secretaria"
+                if (role === 'secretaria') {
+                    secretariaSelect.required = true;
+                    secretariaLabel.innerHTML = 'Secretaria <span class="text-red-500">*</span>';
+                    secretariaHelp.innerHTML = '⚠️ Obrigatório para perfil "Secretaria"';
+                    secretariaHelp.className = 'text-xs text-red-600 mt-1';
+                } else {
+                    secretariaSelect.required = false;
+                    secretariaLabel.innerHTML = 'Secretaria';
+                    secretariaHelp.innerHTML = 'Opcional para este perfil';
+                    secretariaHelp.className = 'text-xs text-gray-500 mt-1';
+                }
             } else {
                 secretariaField.style.display = 'none';
                 secretariaSelect.required = false;
-                secretariaLabel.innerHTML = 'Secretaria';
-                secretariaHelp.innerHTML = 'Opcional para este perfil';
-                secretariaHelp.className = 'text-xs text-gray-500 mt-1';
-                secretariaSelect.value = '';
             }
-        };
+        }
         
-        // Adicionar event listener ao formulário
-        const form = document.getElementById('userEditForm');
-        form.addEventListener('submit', async (e) => {
+        roleSelect.addEventListener('change', toggleSecretariaField);
+        toggleSecretariaField();
+        
+        const formElement = document.getElementById('userForm');
+        
+        // 🔍 DIAGNÓSTICO: Verificar quantos listeners já existem
+        const listenerCount = formElement.getEventListeners ? 
+            (formElement.getEventListeners('submit')?.length || 0) : 
+            'N/A (use Chrome DevTools para verificar)';
+        console.log('⚠️ LISTENERS NO FORM:', listenerCount);
+        
+        // 🧹 LIMPAR qualquer listener anterior (medida drástica)
+        const newForm = formElement.cloneNode(true);
+        formElement.parentNode.replaceChild(newForm, formElement);
+        
+        newForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            e.stopImmediatePropagation(); // Bloquear outros handlers
             
-            // Coletar valores dos inputs
-            const name = document.getElementById('editUserName').value;
-            const email = document.getElementById('editUserEmail').value;
-            const cpf = document.getElementById('editUserCpf').value;
-            const role = document.getElementById('editUserRole').value;
-            const secretariaId = document.getElementById('editUserSecretaria').value;
-            const active = document.getElementById('editUserActive').checked;
+            console.log('🎯 EVENT ORIGINAL:', e);
+            console.log('🎯 TARGET:', e.target);
+            console.log('🎯 CURRENT TARGET:', e.currentTarget);
             
-            console.log('📤 Dados coletados do formulário:', {
-                name, email, role, secretariaId, active
+            const nameElement = document.getElementById('userName');
+            const roleElement = document.getElementById('userRole');
+            const emailElement = document.getElementById('userEmail');
+            const cpfElement = document.getElementById('userCpf');
+            const secretariaElement = document.getElementById('userSecretaria');
+            const activeElement = document.getElementById('userActive');
+            
+            console.log('📋 ELEMENTOS DO FORM:', {
+                name: nameElement,
+                role: roleElement,
+                email: emailElement,
+                cpf: cpfElement,
+                secretaria: secretariaElement,
+                active: activeElement
             });
             
-            // Validação para perfil Secretaria
-            if (role === 'secretaria' && !secretariaId) {
-                alert('Por favor, selecione uma secretaria para usuários do tipo "Autor (Secretaria)"');
+            alert('🔥 SUBMIT V2! Nome: ' + nameElement?.value + ' | Role: ' + roleElement?.value);
+            
+            console.log('🚀 EDITUSER SUBMIT - Código app-v2.js executando!');
+            console.log('📝 Nome elemento:', nameElement, 'Valor:', nameElement?.value);
+            console.log('📝 Role elemento:', roleElement, 'Valor:', roleElement?.value);
+            
+            const role = roleElement.value;
+            const secretariaValue = secretariaElement.value;
+            
+            // Validar secretaria para perfil "secretaria"
+            if (role === 'secretaria' && !secretariaValue) {
+                alert('Por favor, selecione uma secretaria para usuários do tipo "Secretaria"');
                 return;
             }
             
-            // Preparar dados para envio
             const userData = {
-                name: name,
-                email: email,
-                cpf: cpf || null,
+                name: nameElement.value,
+                email: emailElement.value,
+                cpf: cpfElement.value || null,
                 role: role,
-                secretaria_id: secretariaId ? parseInt(secretariaId) : null,
-                active: active ? 1 : 0
+                secretaria_id: secretariaValue ? parseInt(secretariaValue) : null,
+                active: activeElement.checked ? 1 : 0
             };
             
-            console.log('🚀 Enviando para API:', userData);
+            alert('📤 ENVIANDO: ' + JSON.stringify(userData));
+            console.log('📤 DADOS A ENVIAR:', JSON.stringify(userData, null, 2));
+            
+            // 🔍 Interceptar o que Axios VAI enviar
+            console.log('🌐 ANTES do api.put - userData:', userData);
             
             try {
                 const response = await api.put(`/users/${id}`, userData);
-                console.log('✅ Resposta da API:', response.data);
+                console.log('✅ RESPONSE:', response);
                 alert('Usuário atualizado com sucesso!');
                 closeUserModal();
                 loadView('users');
             } catch (error) {
-                console.error('❌ Erro na API:', error.response?.data);
+                console.error('❌ ERRO:', error);
                 alert(error.response?.data?.error || 'Erro ao atualizar usuário');
             }
         });
         
     } catch (error) {
         console.error('Error loading user:', error);
-        alert('Erro ao carregar dados do usuário: ' + error.message);
+        alert('Erro ao carregar dados do usuário');
     }
 }
-
-function closeUserModal() {
-    const modal = document.getElementById('userModal');
-    if (modal) {
-        modal.remove();
-    }
-}
-
 
 async function resetUserPassword(id) {
     const newPassword = prompt('Digite a nova senha (mínimo 6 caracteres):');
