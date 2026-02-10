@@ -1283,27 +1283,129 @@ function loadNewMatterForm(container, matterId = null) {
 }
 
 async function loadMatterForEdit(id) {
+  try {
+    console.log('📝 Carregando matéria para edição ID:', id);
+    
+    // Fazer a requisição diretamente com fetch para debug
+    const token = localStorage.getItem('dom_token');
+    console.log('🔍 Token presente?', token ? 'Sim' : 'Não');
+    
+    const response = await fetch(`/api/matters/${id}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    console.log('🔍 Status da resposta:', response.status);
+    console.log('🔍 URL:', response.url);
+    
+    const responseText = await response.text();
+    console.log('🔍 Resposta bruta:', responseText);
+    
+    // Tentar parsear como JSON
+    let matter;
     try {
-        const { data } = await api.get(`/matters/${id}`);
-        const matter = data.matter;
-        
-        document.getElementById('matterTitle').value = matter.title;
-        document.getElementById('matterTypeId').value = matter.matter_type_id || '';
-        document.getElementById('matterPriority').value = matter.priority || 'normal';
-        document.getElementById('matterPublicationDate').value = matter.publication_date || '';
-        document.getElementById('matterLayout').value = matter.layout_columns;
-        document.getElementById('matterSummary').value = matter.summary || '';
-        document.getElementById('matterContent').value = matter.content;
-        document.getElementById('matterObservations').value = matter.observations || '';
-        
-        // Load content into Quill editor
-        if (window.currentQuillEditor && matter.content) {
-            window.currentQuillEditor.root.innerHTML = matter.content;
-        }
-    } catch (error) {
-        alert('Erro ao carregar matéria: ' + error.message);
-        loadView('myMatters');
+      matter = JSON.parse(responseText);
+      console.log('✅ JSON parseado com sucesso');
+    } catch (jsonError) {
+      console.error('❌ Erro ao parsear JSON:', jsonError);
+      throw new Error('Resposta da API não é JSON válido');
     }
+    
+    console.log('🔍 Estrutura dos dados:', matter);
+    console.log('🔍 Tipo:', typeof matter);
+    console.log('🔍 É array?', Array.isArray(matter));
+    console.log('🔍 Keys:', Object.keys(matter));
+    
+    // Verificar se tem title diretamente
+    if (matter.title) {
+      console.log('✅ Title encontrado diretamente:', matter.title);
+    }
+    // Verificar se tem title em subpropriedades
+    else if (matter.data && matter.data.title) {
+      console.log('✅ Title encontrado em matter.data:', matter.data.title);
+      matter = matter.data;
+    }
+    else if (matter.matter && matter.matter.title) {
+      console.log('✅ Title encontrado em matter.matter:', matter.matter.title);
+      matter = matter.matter;
+    }
+    else {
+      // Procurar title em qualquer nível
+      const findTitle = (obj, path = '') => {
+        for (const key in obj) {
+          if (key === 'title' && obj[key]) {
+            console.log(`✅ Title encontrado em ${path}${key}:`, obj[key]);
+            return obj;
+          }
+          if (typeof obj[key] === 'object' && obj[key] !== null) {
+            const result = findTitle(obj[key], `${path}${key}.`);
+            if (result) return result;
+          }
+        }
+        return null;
+      };
+      
+      const found = findTitle(matter);
+      if (found) {
+        matter = found;
+      } else {
+        throw new Error('Propriedade "title" não encontrada na resposta da API');
+      }
+    }
+    
+    // Preencher os campos do formulário
+    console.log('🔄 Preenchendo formulário com dados:', {
+      id: matter.id,
+      title: matter.title,
+      matter_type_id: matter.matter_type_id,
+      content: matter.content ? matter.content.substring(0, 50) + '...' : 'vazio'
+    });
+    
+    const titleInput = document.getElementById('matterTitle');
+    const typeSelect = document.getElementById('matterTypeId');
+    const prioritySelect = document.getElementById('matterPriority');
+    const publicationDateInput = document.getElementById('matterPublicationDate');
+    const layoutSelect = document.getElementById('matterLayout');
+    const summaryTextarea = document.getElementById('matterSummary');
+    const contentTextarea = document.getElementById('matterContent');
+    const observationsTextarea = document.getElementById('matterObservations');
+    
+    if (!titleInput) throw new Error('Campo title não encontrado no DOM');
+    if (!typeSelect) throw new Error('Campo matterTypeId não encontrado no DOM');
+    if (!contentTextarea) throw new Error('Campo matterContent não encontrado no DOM');
+    
+    titleInput.value = matter.title || '';
+    typeSelect.value = matter.matter_type_id || '';
+    prioritySelect.value = matter.priority || 'normal';
+    
+    // Formatar data de publicação se existir
+    if (publicationDateInput && matter.publication_date) {
+      const pubDate = new Date(matter.publication_date);
+      publicationDateInput.value = pubDate.toISOString().split('T')[0];
+    }
+    
+    layoutSelect.value = matter.layout_columns || '2';
+    summaryTextarea.value = matter.summary || '';
+    contentTextarea.value = matter.content || '';
+    observationsTextarea.value = matter.observations || '';
+    
+    // Carregar conteúdo no editor Quill
+    if (window.currentQuillEditor) {
+      console.log('📄 Carregando conteúdo no editor Quill');
+      window.currentQuillEditor.root.innerHTML = matter.content || '';
+    }
+    
+    console.log('✅ Formulário preenchido com sucesso');
+    
+  } catch (error) {
+    console.error('❌ Erro ao carregar matéria:', error);
+    console.error('❌ Stack:', error.stack);
+    
+    alert(`Erro ao carregar matéria para edição:\n\n${error.message}\n\nVerifique o console para mais detalhes.`);
+    loadView('myMatters');
+  }
 }
 
 async function saveMatterDraft() {
