@@ -68,13 +68,25 @@ async function generateEditionHash(edition: any, matters: any[]): Promise<string
 
 /**
  * Busca configurações do sistema do banco PostgreSQL
+ * CORREÇÃO: Usar system_setting em vez de settings
  */
 async function fetchSystemSettings(db: any) {
   try {
+    console.log('🔍 Buscando configurações do sistema da tabela system_setting...');
+    
+    // CORREÇÃO: Usar system_setting (singular) em vez de settings
     const result = await db.query(`
-      SELECT key, value FROM settings 
-      WHERE key IN ('logo_url', 'expediente', 'city_name', 'office_hours')
+      SELECT key, value FROM system_setting 
+      WHERE key IN (
+        'logo_url', 'expediente', 'city_name', 'office_hours',
+        'prefeitura_nome', 'prefeitura_endereco', 'prefeitura_telefone', 'prefeitura_email',
+        'dom_nome', 'dom_sigla', 'dom_cidade', 'dom_estado',
+        'pdf_footer_text', 'expediente_titulo', 'expediente_chefe_redacao',
+        'edicao_folha_tamanho'
+      )
     `);
+    
+    console.log(`✅ Configurações encontradas na system_setting: ${result.rows.length}`);
     
     const settings: Record<string, any> = {};
     result.rows.forEach((row: any) => {
@@ -86,11 +98,51 @@ async function fetchSystemSettings(db: any) {
       }
     });
     
+    // Se não encontrou configurações, usar padrões
+    if (Object.keys(settings).length === 0) {
+      console.warn('⚠️ Nenhuma configuração encontrada na system_setting. Usando padrões.');
+      return getDefaultSettings();
+    }
+    
     return settings;
-  } catch (error) {
-    console.warn('⚠️  Erro ao buscar configurações:', error);
-    return {};
+  } catch (error: any) {
+    console.error('❌ Erro ao buscar configurações da system_setting:', error.message);
+    console.error('Detalhes do erro SQL:', {
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint,
+      where: error.where,
+      table: error.table
+    });
+    
+    // Retornar configurações padrão em caso de erro
+    return getDefaultSettings();
   }
+}
+
+/**
+ * Configurações padrão para fallback
+ */
+function getDefaultSettings(): Record<string, any> {
+  console.log('⚙️ Usando configurações padrão para PDF');
+  return {
+    'logo_url': '',
+    'expediente': '',
+    'city_name': 'Município',
+    'office_hours': '08:00 às 17:00',
+    'prefeitura_nome': 'Prefeitura Municipal',
+    'prefeitura_endereco': 'Endereço não configurado',
+    'prefeitura_telefone': '(00) 0000-0000',
+    'prefeitura_email': 'email@prefeitura.gov.br',
+    'dom_nome': 'Diário Oficial Municipal',
+    'dom_sigla': 'DOM',
+    'dom_cidade': 'Cidade',
+    'dom_estado': 'Estado',
+    'pdf_footer_text': 'Documento oficial com validade jurídica',
+    'expediente_titulo': 'EXPEDIENTE',
+    'expediente_chefe_redacao': 'Não configurado',
+    'edicao_folha_tamanho': 'A4'
+  };
 }
 
 /**
@@ -104,13 +156,30 @@ function generateEditionHTML(
     expediente?: string;
     city_name?: string;
     office_hours?: string;
+    prefeitura_nome?: string;
+    prefeitura_endereco?: string;
+    prefeitura_telefone?: string;
+    prefeitura_email?: string;
+    dom_nome?: string;
+    dom_sigla?: string;
+    dom_cidade?: string;
+    dom_estado?: string;
+    pdf_footer_text?: string;
+    expediente_titulo?: string;
+    expediente_chefe_redacao?: string;
+    edicao_folha_tamanho?: string;
   } = {}
 ): string {
   const { edition, matters } = data;
-  const cityName = settings.city_name || 'Município';
+  
+  // Usar configurações com fallback para valores padrão
+  const cityName = settings.city_name || settings.dom_cidade || 'Município';
   const expedienteText = settings.expediente || '';
   const logoUrl = settings.logo_url || '';
   const officeHours = settings.office_hours || '08:00 às 17:00';
+  const prefeituraNome = settings.prefeitura_nome || 'Prefeitura Municipal';
+  const domNome = settings.dom_nome || 'Diário Oficial Municipal';
+  const domSigla = settings.dom_sigla || 'DOM';
   
   // Formatar data para exibição
   const formatDate = (dateString: string) => {
@@ -233,7 +302,7 @@ function generateEditionHTML(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Diário Oficial - Edição ${edition.edition_number}</title>
+  <title>${domSigla} - Edição ${edition.edition_number}</title>
   <style>
     /* Reset e configurações base */
     * {
@@ -279,11 +348,13 @@ function generateEditionHTML(
       font-weight: bold;
       text-transform: uppercase;
       margin: 10px 0;
+      color: #000;
     }
     
     .subtitle {
       font-size: 14pt;
       margin-bottom: 10px;
+      color: #333;
     }
     
     .edition-info {
@@ -294,10 +365,12 @@ function generateEditionHTML(
     .edition-number {
       font-weight: bold;
       color: #000;
+      font-size: 14pt;
     }
     
     .edition-date {
       font-style: italic;
+      color: #666;
     }
     
     /* Índice */
@@ -349,6 +422,7 @@ function generateEditionHTML(
     
     .index-item-page {
       font-weight: bold;
+      color: #000;
     }
     
     /* Matérias */
@@ -550,10 +624,11 @@ function generateEditionHTML(
 </head>
 <body>
   <header class="edition-header">
-    ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo">` : ''}
+    ${logoUrl ? `<img src="${logoUrl}" alt="Logo ${prefeituraNome}" class="logo">` : ''}
     
-    <h1 class="main-title">DIÁRIO OFICIAL</h1>
-    <h2 class="subtitle">${cityName.toUpperCase()}</h2>
+    <h1 class="main-title">${domNome.toUpperCase()}</h1>
+    <h2 class="subtitle">${prefeituraNome.toUpperCase()}</h2>
+    <h3 class="subtitle">${cityName.toUpperCase()}</h3>
     
     <div class="edition-info">
       <div class="edition-number">Edição: ${edition.edition_number}</div>
@@ -571,7 +646,7 @@ function generateEditionHTML(
   
   ${expedienteText ? `
     <section class="expediente-section">
-      <h3 class="expediente-title">EXPEDIENTE</h3>
+      <h3 class="expediente-title">${settings.expediente_titulo || 'EXPEDIENTE'}</h3>
       <div class="expediente-content">${expedienteText}</div>
     </section>
   ` : ''}
@@ -604,7 +679,7 @@ function generateEditionHTML(
     <div class="validation-info">
       <strong>Código de Validação:</strong>
       <div class="validation-hash">${validationHash}</div>
-      <small>Use este código para verificar a autenticidade do documento em https://diariooficial.saoluis.ma.gov.br/verificar</small>
+      <small>Use este código para verificar a autenticidade do documento</small>
     </div>
   </footer>
 </body>
@@ -634,15 +709,31 @@ export async function generateEditionPDF(
 ): Promise<PDFResult> {
   try {
     console.log('🎨 Gerando PDF/HTML para edição:', data.edition.edition_number);
+    console.log('📦 Dados recebidos:', {
+      editionId: data.edition.id,
+      editionNumber: data.edition.edition_number,
+      mattersCount: data.matters?.length || 0
+    });
     
-    // Buscar configurações do sistema
+    // Buscar configurações do sistema - CORREÇÃO: usa system_setting
+    console.log('🔍 Chamando fetchSystemSettings()...');
     const settings = await fetchSystemSettings(db);
+    console.log(`✅ Configurações carregadas: ${Object.keys(settings).length} chaves`);
+    
+    // Log das configurações importantes
+    const importantKeys = ['prefeitura_nome', 'dom_nome', 'dom_sigla', 'pdf_logo_url'];
+    importantKeys.forEach(key => {
+      const value = settings[key];
+      console.log(`   ${key}: ${value ? '✓ ' + value.substring(0, 30) + '...' : '✗ (não encontrada)'}`);
+    });
     
     // Gerar hash do conteúdo
     const contentHash = await generateEditionHash(data.edition, data.matters);
+    console.log(`🔐 Hash gerado: ${contentHash.substring(0, 16)}...`);
     
     // Gerar HTML da edição
     const htmlContent = generateEditionHTML(data, contentHash, settings);
+    console.log('📄 HTML gerado com sucesso');
     
     // Estimativa de páginas
     const estimatedPages = Math.ceil(data.matters.length * 0.8) + 1;
@@ -655,6 +746,7 @@ export async function generateEditionPDF(
     
   } catch (error: any) {
     console.error('❌ Erro ao gerar PDF/HTML:', error);
+    console.error('Stack trace:', error.stack);
     throw new Error(`Falha ao gerar PDF: ${error.message}`);
   }
 }

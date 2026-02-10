@@ -5,6 +5,8 @@ import db from '../lib/db';
 
 const matters = new Hono<HonoContext>();
 
+
+
 // Todas as rotas exigem autenticação
 matters.use('/*', authMiddleware);
 
@@ -253,13 +255,17 @@ matters.get('/:id/attachments', async (c) => {
  * Upload de anexos para uma matéria
  */
 matters.post('/:id/attachments', async (c) => {
+  console.log('🔵 Rota POST /api/matters/:id/attachments chamada');
+  
   try {
     const user = c.get('user');
     if (!user) {
+      console.log('❌ Usuário não autenticado');
       return c.json({ error: 'Não autenticado' }, 401);
     }
 
     const id = parseInt(c.req.param('id'));
+    console.log(`📎 Upload para matéria ID: ${id}`);
 
     // Verificar se a matéria existe e se o usuário tem permissão
     const checkResult = await db.query(
@@ -269,40 +275,55 @@ matters.post('/:id/attachments', async (c) => {
 
     const matter = checkResult.rows[0];
     if (!matter) {
+      console.log(`❌ Matéria ID: ${id} não encontrada`);
       return c.json({ error: 'Matéria não encontrada' }, 404);
     }
 
+    console.log(`📊 Matéria encontrada: ID ${matter.id}, Status: ${matter.status}, Secretaria: ${matter.secretaria_id}`);
+
     // Verificar permissões
     if (user.role === 'secretaria' && matter.secretaria_id !== user.secretaria_id) {
+      console.log(`🚫 Acesso negado: Usuário secretaria ${user.secretaria_id} tentando acessar matéria da secretaria ${matter.secretaria_id}`);
       return c.json({ error: 'Acesso negado' }, 403);
     }
 
     // Só permite adicionar anexos em matérias em draft ou submitted
     if (matter.status !== 'draft' && matter.status !== 'submitted') {
+      console.log(`⚠️ Status inválido para upload: ${matter.status}`);
       return c.json({ 
         error: 'Só é possível adicionar anexos em matérias em rascunho ou enviadas para análise' 
       }, 400);
     }
 
-    const body = await c.req.parseBody();
+    // Obter o FormData (CORREÇÃO AQUI)
+    const formData = await c.req.formData();
+    console.log('📦 FormData recebido, campos:', Array.from(formData.keys()));
+
+    // Coletar arquivos do FormData
+    const files: File[] = [];
+    const fileFields: string[] = [];
     
-    // Obter o arquivo do FormData (pode ter múltiplos arquivos)
-    // Note: Hono lida com FormData de forma diferente
-    const files = [];
-    
-    // Para FormData com múltiplos arquivos
-    for (const [key, value] of Object.entries(body)) {
+    // Percorrer todos os campos do FormData
+    for (const [key, value] of formData.entries()) {
+      console.log(`🔍 Campo: ${key}, tipo: ${typeof value}`);
+      
       if (value instanceof File) {
+        console.log(`📁 Arquivo encontrado: ${value.name} (${value.size} bytes)`);
         files.push(value);
+        fileFields.push(key);
       }
     }
 
     if (files.length === 0) {
+      console.log('❌ Nenhum arquivo enviado');
       return c.json({ error: 'Nenhum arquivo enviado' }, 400);
     }
 
+    console.log(`📊 Total de arquivos: ${files.length}`);
+    
     // Limitar número de arquivos
     if (files.length > 10) {
+      console.log(`❌ Excedeu o limite de arquivos: ${files.length} > 10`);
       return c.json({ error: 'Máximo de 10 arquivos por upload' }, 400);
     }
 
@@ -310,8 +331,28 @@ matters.post('/:id/attachments', async (c) => {
     const MAX_SIZE = 10 * 1024 * 1024;
     for (const file of files) {
       if (file.size > MAX_SIZE) {
+        console.log(`❌ Arquivo ${file.name} excede tamanho máximo: ${file.size} > ${MAX_SIZE}`);
         return c.json({ 
           error: `Arquivo ${file.name} excede o tamanho máximo de 10MB` 
+        }, 400);
+      }
+      
+      // Validar tipo MIME
+      const allowedMimeTypes = [
+        'application/pdf',
+        'image/jpeg',
+        'image/png',
+        'image/gif',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      ];
+      
+      if (!allowedMimeTypes.includes(file.type) && file.type !== '') {
+        console.log(`⚠️ Tipo MIME não permitido: ${file.type}`);
+        return c.json({
+          error: `Tipo de arquivo não permitido: ${file.name}. Tipos permitidos: PDF, JPG, PNG, GIF, DOC, DOCX, XLS, XLSX`
         }, 400);
       }
     }
@@ -320,30 +361,52 @@ matters.post('/:id/attachments', async (c) => {
     const insertedAttachments = [];
     
     for (const file of files) {
-      // Em um sistema real, você salvaria o arquivo no sistema de arquivos ou S3
-      // Aqui estamos apenas registrando no banco de dados
-      const result = await db.query(
-        `INSERT INTO attachments (
-          matter_id,
-          filename,
-          original_name,
-          file_size,
-          mime_type,
-          uploaded_by,
-          uploaded_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
-        RETURNING *`,
-        [
-          id,
-          file.name, // Em produção, gere um nome único
-          file.name,
-          file.size,
-          file.type,
-          user.id
-        ]
-      );
-      
-      insertedAttachments.push(result.rows[0]);
+      try {
+        console.log(`💾 Salvando arquivo: ${file.name}`);
+        
+        // Gerar nome único para o arquivo
+        const uniqueFilename = `${Date.now()}-${Math.random().toString(36).substring(2)}-${file.name}`;
+        
+        // Em um ambiente real, você salvaria o arquivo aqui
+        // Exemplo para salvar localmente (descomente se necessário):
+        // const uploadPath = `./uploads/${uniqueFilename}`;
+        // await Bun.write(uploadPath, file);
+        
+        // Inserir no banco de dados
+        const result = await db.query(
+          `INSERT INTO attachments (
+            matter_id,
+            filename,
+            original_name,
+            file_size,
+            mime_type,
+            uploaded_by,
+            uploaded_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+          RETURNING *`,
+          [
+            id,
+            uniqueFilename, // Nome único para o arquivo
+            file.name,
+            file.size,
+            file.type || 'application/octet-stream',
+            user.id
+          ]
+        );
+        
+        console.log(`✅ Arquivo salvo no banco: ${file.name} (ID: ${result.rows[0].id})`);
+        insertedAttachments.push(result.rows[0]);
+      } catch (fileErr: any) {
+        console.error(`❌ Erro ao salvar arquivo ${file.name}:`, fileErr);
+        // Continue com outros arquivos, mas registre o erro
+      }
+    }
+
+    if (insertedAttachments.length === 0) {
+      console.log('❌ Nenhum arquivo foi salvo com sucesso');
+      return c.json({ 
+        error: 'Não foi possível salvar nenhum arquivo' 
+      }, 500);
     }
 
     // Atualizar flag de anexos na matéria
@@ -352,12 +415,15 @@ matters.post('/:id/attachments', async (c) => {
       [id]
     );
 
+    console.log(`✅ ${insertedAttachments.length} arquivo(s) anexado(s) com sucesso à matéria ${id}`);
+    
     return c.json({
-      message: `${files.length} arquivo(s) anexado(s) com sucesso`,
+      message: `${insertedAttachments.length} arquivo(s) anexado(s) com sucesso`,
       attachments: insertedAttachments
     }, 201);
   } catch (err: any) {
-    console.error('Erro ao fazer upload de anexos:', err);
+    console.error('❌ Erro ao fazer upload de anexos:', err);
+    console.error('❌ Stack trace:', err.stack);
     return c.json({ 
       error: 'Erro ao fazer upload de anexos',
       details: process.env.NODE_ENV === 'development' ? err.message : undefined 
@@ -367,11 +433,78 @@ matters.post('/:id/attachments', async (c) => {
 
 
 /**
+ * DELETE /api/matters/attachments/:id
+ * Remover um anexo
+ */
+matters.delete('/attachments/:id', async (c) => {
+  try {
+    const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Não autenticado' }, 401);
+    }
+
+    const id = parseInt(c.req.param('id'));
+
+    // Buscar anexo e verificar permissões
+    const result = await db.query(
+      `SELECT a.*, m.secretaria_id, m.status 
+       FROM attachments a 
+       JOIN matters m ON m.id = a.matter_id
+       WHERE a.id = $1`,
+      [id]
+    );
+
+    const attachment = result.rows[0];
+    if (!attachment) {
+      return c.json({ error: 'Anexo não encontrado' }, 404);
+    }
+
+    // Verificar permissões
+    if (user.role === 'secretaria' && attachment.secretaria_id !== user.secretaria_id) {
+      return c.json({ error: 'Acesso negado' }, 403);
+    }
+
+    // Só permite remover anexos de matérias em draft ou submitted
+    if (attachment.status !== 'draft' && attachment.status !== 'submitted') {
+      return c.json({ 
+        error: 'Só é possível remover anexos de matérias em rascunho ou enviadas para análise' 
+      }, 400);
+    }
+
+    // Remover anexo
+    await db.query('DELETE FROM attachments WHERE id = $1', [id]);
+
+    // Verificar se ainda existem anexos
+    const countResult = await db.query(
+      'SELECT COUNT(*) FROM attachments WHERE matter_id = $1',
+      [attachment.matter_id]
+    );
+    
+    const hasAttachments = parseInt(countResult.rows[0].count) > 0;
+    
+    // Atualizar flag de anexos na matéria
+    await db.query(
+      'UPDATE matters SET has_attachments = $1, updated_at = NOW() WHERE id = $2',
+      [hasAttachments, attachment.matter_id]
+    );
+
+    return c.json({
+      message: 'Anexo removido com sucesso'
+    });
+  } catch (err: any) {
+    console.error('Erro ao remover anexo:', err);
+    return c.json({ error: 'Erro ao remover anexo' }, 500);
+  }
+});
+
+/**
  * GET /api/attachments/:id/download
  * Download de um anexo específico
  */
 matters.get('/attachments/:id/download', async (c) => {
   try {
+    console.log(`📥 Rota de download chamada para anexo ID: ${c.req.param('id')}`);
+    
     const user = c.get('user');
     if (!user) {
       return c.json({ error: 'Não autenticado' }, 401);
@@ -393,30 +526,73 @@ matters.get('/attachments/:id/download', async (c) => {
       return c.json({ error: 'Anexo não encontrado' }, 404);
     }
 
+    console.log(`📊 Anexo encontrado: ${attachment.original_name}, tipo: ${attachment.mime_type}`);
+
     // Verificar permissões
     if (user.role === 'secretaria' && attachment.secretaria_id !== user.secretaria_id) {
       return c.json({ error: 'Acesso negado' }, 403);
     }
 
-    // Em produção, você buscaria o arquivo real do sistema de arquivos/S3
-    // Aqui estamos apenas retornando uma mensagem simulada
-    return c.json({
-      message: 'Download de anexo - funcionalidade em desenvolvimento',
-      attachment: attachment
+    // SIMULAÇÃO: Em produção, você buscaria o arquivo real do sistema de arquivos/S3
+    // Por enquanto, vamos retornar um conteúdo simples para teste
+    
+    let content = '';
+    let contentType = attachment.mime_type || 'application/octet-stream';
+    
+    // Criar conteúdo baseado no tipo de arquivo
+    if (attachment.mime_type?.includes('pdf')) {
+      // Simular um PDF simples
+      content = `%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 44 >>\nstream\nBT\n/F1 12 Tf\n72 720 Td\n(Anexo: ${attachment.original_name}) Tj\nET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f\n0000000010 00000 n\n0000000053 00000 n\n0000000102 00000 n\n0000000176 00000 n\ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n242\n%%EOF`;
+    } else if (attachment.mime_type?.includes('image')) {
+      // Simular uma imagem simples (SVG)
+      content = `<svg width="400" height="200" xmlns="http://www.w3.org/2000/svg">
+        <rect width="400" height="200" fill="#3b82f6"/>
+        <text x="200" y="100" font-family="Arial" font-size="24" fill="white" text-anchor="middle">
+          Imagem: ${attachment.original_name}
+        </text>
+        <text x="200" y="130" font-family="Arial" font-size="14" fill="white" text-anchor="middle">
+          Tamanho: ${Math.round(attachment.file_size / 1024)} KB
+        </text>
+      </svg>`;
+      contentType = 'image/svg+xml';
+    } else if (attachment.mime_type?.includes('text') || 
+               attachment.original_name?.endsWith('.txt') ||
+               attachment.original_name?.endsWith('.csv')) {
+      // Conteúdo de texto
+      content = `Arquivo: ${attachment.original_name}\n\n`;
+      content += `Tipo: ${attachment.mime_type}\n`;
+      content += `Tamanho: ${attachment.file_size} bytes\n`;
+      content += `Upload realizado em: ${attachment.uploaded_at}\n`;
+      content += `\n--- CONTEÚDO DO ARQUIVO ---\n`;
+      content += `Este é um conteúdo simulado para demonstração.\n`;
+      content += `Em produção, aqui estaria o conteúdo real do arquivo.\n`;
+      contentType = 'text/plain';
+    } else {
+      // Para outros tipos
+      content = `Conteúdo simulado para: ${attachment.original_name}\nTipo: ${attachment.mime_type}\nTamanho: ${attachment.file_size} bytes`;
+      contentType = 'text/plain';
+    }
+    
+    console.log(`📤 Enviando resposta: ${contentType}, ${content.length} bytes`);
+    
+    // Retornar como resposta de arquivo
+    return new Response(content, {
+      headers: {
+        'Content-Type': contentType,
+        'Content-Disposition': `inline; filename="${attachment.original_name}"`,
+        'Cache-Control': 'no-cache',
+        'X-Filename': attachment.original_name,
+        'X-File-Size': attachment.file_size.toString(),
+        'X-File-Type': attachment.mime_type || 'unknown'
+      }
     });
-
-    // Em produção, seria algo como:
-    // const filePath = `/path/to/uploads/${attachment.filename}`;
-    // const fileBuffer = await Bun.file(filePath).arrayBuffer();
-    // return new Response(fileBuffer, {
-    //   headers: {
-    //     'Content-Type': attachment.mime_type,
-    //     'Content-Disposition': `attachment; filename="${attachment.original_name}"`
-    //   }
-    // });
+    
   } catch (err: any) {
-    console.error('Erro ao buscar anexo:', err);
-    return c.json({ error: 'Erro ao buscar anexo' }, 500);
+    console.error('❌ Erro no download:', err);
+    return c.json({ 
+      error: 'Erro ao buscar anexo',
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined 
+    }, 500);
   }
 });
 

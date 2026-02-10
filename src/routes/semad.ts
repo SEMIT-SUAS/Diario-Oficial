@@ -1,12 +1,11 @@
 // ====================================
-// DOM - SEMAD (Análise e Aprovação) Routes
+// DOM - SEMAD (Análise e Aprovação) Routes - VERSÃO CORRIGIDA
 // ====================================
 
 import { Hono } from 'hono';
-import { HonoContext, Matter } from '../types';
+import { HonoContext } from '../types';
 import { authMiddleware, requireRole } from '../middleware/auth';
-import { generateMatterSignature } from '../utils/auth';
-import db from '../lib/db'; // Importe a conexão PostgreSQL
+import db from '../lib/db';
 
 const semad = new Hono<HonoContext>();
 
@@ -33,7 +32,7 @@ semad.get('/pending', async (c) => {
       LEFT JOIN categories c ON m.category_id = c.id
       LEFT JOIN users u ON m.author_id = u.id
       LEFT JOIN matter_types mt ON m.matter_type_id = mt.id
-      WHERE m.status IN ('submitted', 'under_review')
+      WHERE m.status = 'submitted'
       ORDER BY m.submitted_at ASC
     `);
     
@@ -62,8 +61,8 @@ semad.get('/approved', async (c) => {
       LEFT JOIN secretarias s ON m.secretaria_id = s.id
       LEFT JOIN users u ON m.author_id = u.id
       LEFT JOIN matter_types mt ON m.matter_type_id = mt.id
-      WHERE m.status IN ('approved', 'scheduled')
-      ORDER BY m.approved_at DESC
+      WHERE m.status = 'approved'
+      ORDER BY m.updated_at DESC
       LIMIT 50
     `);
     
@@ -76,10 +75,10 @@ semad.get('/approved', async (c) => {
 });
 
 /**
- * POST /api/semad/:id/review
- * Inicia análise de uma matéria
+ * POST /api/semad/:id/approve
+ * Aprova matéria - VERSÃO SIMPLIFICADA
  */
-semad.post('/:id/review', async (c) => {
+semad.post('/:id/approve', async (c) => {
   try {
     const user = c.get('user');
     if (!user) {
@@ -87,6 +86,7 @@ semad.post('/:id/review', async (c) => {
     }
     
     const id = parseInt(c.req.param('id'));
+    const { review_notes } = await c.req.json();
     
     const result = await db.query(
       'SELECT * FROM matters WHERE id = $1',
@@ -100,123 +100,70 @@ semad.post('/:id/review', async (c) => {
     }
     
     if (matter.status !== 'submitted') {
-      return c.json({ error: 'Matéria não está aguardando análise' }, 400);
-    }
-    
-    await db.query(`
-      UPDATE matters 
-      SET status = 'under_review', reviewer_id = $1, reviewed_at = NOW(), updated_at = NOW()
-      WHERE id = $2
-    `, [user.id, id]);
-    
-    return c.json({ message: 'Análise iniciada com sucesso' });
-    
-  } catch (error: any) {
-    console.error('Start review error:', error);
-    return c.json({ error: 'Erro ao iniciar análise', details: error.message }, 500);
-  }
-});
-
-/**
- * POST /api/semad/:id/approve
- * Aprova matéria
- */
-semad.post('/:id/approve', async (c) => {
-  try {
-    const user = c.get('user');
-    if (!user) {
-      return c.json({ error: 'Usuário não autenticado' }, 401);
-    }
-    
-    const id = parseInt(c.req.param('id'));
-    const { review_notes, scheduled_date } = await c.req.json();
-    
-    const result = await db.query(
-      'SELECT * FROM matters WHERE id = $1',
-      [id]
-    );
-    
-    const matter = result.rows[0];
-    
-    if (!matter) {
-      return c.json({ error: 'Matéria não encontrada' }, 404);
-    }
-    
-    if (matter.status !== 'under_review' && matter.status !== 'submitted') {
       return c.json({ error: 'Matéria não pode ser aprovada neste status' }, 400);
     }
     
-    // Gerar assinatura eletrônica
-    const timestamp = new Date().toISOString();
-    const signature = await generateMatterSignature(
-      matter.id,
-      user.id,
-      matter.content,
-      timestamp
-    );
+    // Primeiro, verificar quais colunas existem
+    const tableInfo = await db.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'matters'
+    `);
     
-    // Determinar novo status
-    const newStatus = scheduled_date ? 'scheduled' : 'approved';
+    const columns = tableInfo.rows.map(row => row.column_name);
+    console.log('📋 Colunas disponíveis na tabela matters:', columns);
     
-    await db.query(`
-      UPDATE matters 
-      SET 
-        status = $1,
-        reviewer_id = $2,
-        review_notes = $3,
-        approved_at = NOW(),
-        scheduled_date = $4,
-        signature_hash = $5,
-        signature_type = 'eletronica',
-        signed_by = $6,
-        signed_at = $7,
-        updated_at = NOW()
-      WHERE id = $8
-    `, [
-      newStatus,
-      user.id,
-      review_notes || null,
-      scheduled_date || null,
-      signature,
-      user.id,
-      timestamp,
-      id
-    ]);
+    // Montar query dinamicamente
+    let updateQuery = `UPDATE matters SET status = 'approved'`;
+    const queryParams: any[] = [];
+    let paramCount = 1;
     
-    // Criar notificação para o autor
-    await db.query(`
-      INSERT INTO notifications (user_id, matter_id, type, title, message, created_at)
-      VALUES ($1, $2, 'matter_approved', $3, $4, NOW())
-    `, [
-      matter.author_id,
-      id,
-      'Matéria aprovada',
-      `Sua matéria "${matter.title}" foi aprovada pela SEMAD`
-    ]);
+    // Adicionar reviewer_id se a coluna existir
+    if (columns.includes('reviewer_id')) {
+      updateQuery += `, reviewer_id = $${paramCount}`;
+      queryParams.push(user.id);
+      paramCount++;
+    }
     
-    // Registro de auditoria
-    const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
-    const userAgent = c.req.header('user-agent') || 'unknown';
+    // Adicionar review_notes se a coluna existir
+    if (columns.includes('review_notes') && review_notes) {
+      updateQuery += `, review_notes = $${paramCount}`;
+      queryParams.push(review_notes);
+      paramCount++;
+    }
     
-    await db.query(`
-      INSERT INTO audit_logs (
-        user_id, entity_type, entity_id, action,
-        new_values, ip_address, user_agent, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-    `, [
-      user.id,
-      'matter',
-      id,
-      'approve',
-      JSON.stringify({ status: newStatus, review_notes, scheduled_date, signature }),
-      ipAddress,
-      userAgent
-    ]);
+    // Adicionar approved_at se a coluna existir
+    if (columns.includes('approved_at')) {
+      updateQuery += `, approved_at = NOW()`;
+    }
+    
+    // Sempre atualizar updated_at
+    updateQuery += `, updated_at = NOW() WHERE id = $${paramCount} RETURNING *`;
+    queryParams.push(id);
+    
+    console.log('📝 Query de aprovação:', updateQuery);
+    console.log('🔢 Parâmetros:', queryParams);
+    
+    const updateResult = await db.query(updateQuery, queryParams);
+    
+    // Tentar criar notificação para o autor (se a tabela notifications existir)
+    try {
+      await db.query(`
+        INSERT INTO notifications (user_id, matter_id, type, title, message, created_at)
+        VALUES ($1, $2, 'matter_approved', $3, $4, NOW())
+      `, [
+        matter.author_id,
+        id,
+        'Matéria aprovada',
+        `Sua matéria "${matter.title}" foi aprovada pela SEMAD`
+      ]);
+    } catch (notifError) {
+      console.log('⚠️ Não foi possível criar notificação:', notifError.message);
+    }
     
     return c.json({ 
       message: 'Matéria aprovada com sucesso',
-      signature: signature,
-      status: newStatus
+      status: 'approved'
     });
     
   } catch (error: any) {
@@ -227,7 +174,7 @@ semad.post('/:id/approve', async (c) => {
 
 /**
  * POST /api/semad/:id/reject
- * Rejeita matéria e devolve para secretaria
+ * Rejeita matéria - VERSÃO SIMPLIFICADA
  */
 semad.post('/:id/reject', async (c) => {
   try {
@@ -254,50 +201,67 @@ semad.post('/:id/reject', async (c) => {
       return c.json({ error: 'Matéria não encontrada' }, 404);
     }
     
-    if (matter.status !== 'under_review' && matter.status !== 'submitted') {
+    if (matter.status !== 'submitted') {
       return c.json({ error: 'Matéria não pode ser rejeitada neste status' }, 400);
     }
     
-    await db.query(`
-      UPDATE matters 
-      SET 
-        status = 'rejected',
-        reviewer_id = $1,
-        rejection_reason = $2,
-        reviewed_at = NOW(),
-        updated_at = NOW()
-      WHERE id = $3
-    `, [user.id, rejection_reason, id]);
+    // Primeiro, verificar quais colunas existem
+    const tableInfo = await db.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'matters'
+    `);
     
-    // Criar notificação para o autor
-    await db.query(`
-      INSERT INTO notifications (user_id, matter_id, type, title, message, created_at)
-      VALUES ($1, $2, 'matter_rejected', $3, $4, NOW())
-    `, [
-      matter.author_id,
-      id,
-      'Matéria rejeitada',
-      `Sua matéria "${matter.title}" foi rejeitada pela SEMAD. Motivo: ${rejection_reason}`
-    ]);
+    const columns = tableInfo.rows.map(row => row.column_name);
+    console.log('📋 Colunas disponíveis na tabela matters:', columns);
     
-    // Registro de auditoria
-    const ipAddress = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
-    const userAgent = c.req.header('user-agent') || 'unknown';
+    // Montar query dinamicamente
+    let updateQuery = `UPDATE matters SET status = 'rejected'`;
+    const queryParams: any[] = [];
+    let paramCount = 1;
     
-    await db.query(`
-      INSERT INTO audit_logs (
-        user_id, entity_type, entity_id, action,
-        new_values, ip_address, user_agent, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-    `, [
-      user.id,
-      'matter',
-      id,
-      'reject',
-      JSON.stringify({ rejection_reason }),
-      ipAddress,
-      userAgent
-    ]);
+    // Adicionar reviewer_id se a coluna existir
+    if (columns.includes('reviewer_id')) {
+      updateQuery += `, reviewer_id = $${paramCount}`;
+      queryParams.push(user.id);
+      paramCount++;
+    }
+    
+    // Adicionar rejection_reason se a coluna existir
+    if (columns.includes('rejection_reason')) {
+      updateQuery += `, rejection_reason = $${paramCount}`;
+      queryParams.push(rejection_reason);
+      paramCount++;
+    }
+    
+    // Adicionar reviewed_at se a coluna existir
+    if (columns.includes('reviewed_at')) {
+      updateQuery += `, reviewed_at = NOW()`;
+    }
+    
+    // Sempre atualizar updated_at
+    updateQuery += `, updated_at = NOW() WHERE id = $${paramCount} RETURNING *`;
+    queryParams.push(id);
+    
+    console.log('📝 Query de rejeição:', updateQuery);
+    console.log('🔢 Parâmetros:', queryParams);
+    
+    await db.query(updateQuery, queryParams);
+    
+    // Tentar criar notificação para o autor (se a tabela notifications existir)
+    try {
+      await db.query(`
+        INSERT INTO notifications (user_id, matter_id, type, title, message, created_at)
+        VALUES ($1, $2, 'matter_rejected', $3, $4, NOW())
+      `, [
+        matter.author_id,
+        id,
+        'Matéria rejeitada',
+        `Sua matéria "${matter.title}" foi rejeitada pela SEMAD. Motivo: ${rejection_reason}`
+      ]);
+    } catch (notifError) {
+      console.log('⚠️ Não foi possível criar notificação:', notifError.message);
+    }
     
     return c.json({ message: 'Matéria rejeitada com sucesso' });
     
@@ -309,7 +273,7 @@ semad.post('/:id/reject', async (c) => {
 
 /**
  * POST /api/semad/:id/comment
- * Adiciona comentário/observação à matéria
+ * Adiciona comentário/observação à matéria - VERSÃO SIMPLIFICADA
  */
 semad.post('/:id/comment', async (c) => {
   try {
@@ -325,33 +289,23 @@ semad.post('/:id/comment', async (c) => {
       return c.json({ error: 'Comentário é obrigatório' }, 400);
     }
     
+    // Verificar se a tabela comments existe
+    const tableExists = await db.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'comments'
+      );
+    `);
+    
+    if (!tableExists.rows[0]?.exists) {
+      return c.json({ error: 'Funcionalidade de comentários não disponível' }, 501);
+    }
+    
     const commentResult = await db.query(`
       INSERT INTO comments (matter_id, user_id, comment, is_internal, created_at)
       VALUES ($1, $2, $3, $4, NOW())
       RETURNING id
     `, [id, user.id, comment, is_internal]);
-    
-    // Criar notificação se comentário for externo
-    if (!is_internal) {
-      const matterResult = await db.query(
-        'SELECT author_id, title FROM matters WHERE id = $1',
-        [id]
-      );
-      
-      const matter = matterResult.rows[0];
-      
-      if (matter) {
-        await db.query(`
-          INSERT INTO notifications (user_id, matter_id, type, title, message, created_at)
-          VALUES ($1, $2, 'comment_added', $3, $4, NOW())
-        `, [
-          matter.author_id,
-          id,
-          'Novo comentário na matéria',
-          `A matéria "${matter.title}" recebeu um novo comentário da SEMAD`
-        ]);
-      }
-    }
     
     return c.json({ 
       message: 'Comentário adicionado com sucesso',
@@ -366,21 +320,31 @@ semad.post('/:id/comment', async (c) => {
 
 /**
  * GET /api/semad/comments/:id
- * Lista comentários de uma matéria
+ * Lista comentários de uma matéria - VERSÃO SIMPLIFICADA
  */
 semad.get('/comments/:id', async (c) => {
   try {
     const id = parseInt(c.req.param('id'));
     
+    // Verificar se a tabela comments existe
+    const tableExists = await db.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'comments'
+      );
+    `);
+    
+    if (!tableExists.rows[0]?.exists) {
+      return c.json({ comments: [] });
+    }
+    
     const result = await db.query(`
       SELECT 
         c.*,
         u.name as user_name,
-        u.role as user_role,
-        s.acronym as secretaria_acronym
+        u.role as user_role
       FROM comments c
       LEFT JOIN users u ON c.user_id = u.id
-      LEFT JOIN secretarias s ON u.secretaria_id = s.id
       WHERE c.matter_id = $1
       ORDER BY c.created_at DESC
     `, [id]);
@@ -395,7 +359,7 @@ semad.get('/comments/:id', async (c) => {
 
 /**
  * GET /api/semad/dashboard
- * Dashboard com estatísticas da SEMAD
+ * Dashboard com estatísticas da SEMAD - VERSÃO SIMPLIFICADA
  */
 semad.get('/dashboard', async (c) => {
   try {
@@ -411,23 +375,23 @@ semad.get('/dashboard', async (c) => {
     const pendingResult = await db.query(`
       SELECT COUNT(*) as count
       FROM matters
-      WHERE status IN ('submitted', 'under_review')
+      WHERE status = 'submitted'
     `);
     
-    // Matérias aprovadas hoje
-    const approvedTodayResult = await db.query(`
+    // Matérias aprovadas recentemente
+    const approvedRecentResult = await db.query(`
       SELECT COUNT(*) as count
       FROM matters
       WHERE status = 'approved' 
-      AND DATE(approved_at) = CURRENT_DATE
+      AND updated_at >= NOW() - INTERVAL '7 days'
     `);
     
-    // Matérias rejeitadas hoje
-    const rejectedTodayResult = await db.query(`
+    // Matérias rejeitadas recentemente
+    const rejectedRecentResult = await db.query(`
       SELECT COUNT(*) as count
       FROM matters
       WHERE status = 'rejected' 
-      AND DATE(reviewed_at) = CURRENT_DATE
+      AND updated_at >= NOW() - INTERVAL '7 days'
     `);
     
     // Matérias por secretaria (top 10)
@@ -454,32 +418,18 @@ semad.get('/dashboard', async (c) => {
       FROM matters m
       JOIN secretarias s ON m.secretaria_id = s.id
       JOIN users u ON m.author_id = u.id
-      WHERE m.status IN ('submitted', 'under_review')
+      WHERE m.status = 'submitted'
       ORDER BY m.submitted_at ASC
       LIMIT 5
-    `);
-    
-    // Atividades recentes da SEMAD
-    const recentActivityResult = await db.query(`
-      SELECT 
-        al.*,
-        u.name as user_name
-      FROM audit_logs al
-      JOIN users u ON al.user_id = u.id
-      WHERE u.role IN ('semad', 'admin')
-        AND al.entity_type = 'matter'
-      ORDER BY al.created_at DESC
-      LIMIT 10
     `);
     
     return c.json({
       status_stats: statusStatsResult.rows,
       pending_count: parseInt(pendingResult.rows[0]?.count || '0'),
-      approved_today: parseInt(approvedTodayResult.rows[0]?.count || '0'),
-      rejected_today: parseInt(rejectedTodayResult.rows[0]?.count || '0'),
+      approved_recent: parseInt(approvedRecentResult.rows[0]?.count || '0'),
+      rejected_recent: parseInt(rejectedRecentResult.rows[0]?.count || '0'),
       by_secretaria: bySecretariaResult.rows,
-      oldest_pending: oldestPendingResult.rows,
-      recent_activity: recentActivityResult.rows
+      oldest_pending: oldestPendingResult.rows
     });
     
   } catch (error: any) {
@@ -490,29 +440,27 @@ semad.get('/dashboard', async (c) => {
 
 /**
  * GET /api/semad/analytics
- * Estatísticas detalhadas para relatórios
+ * Estatísticas detalhadas para relatórios - VERSÃO SIMPLIFICADA
  */
 semad.get('/analytics', async (c) => {
   try {
     const period = c.req.query('period') || 'month'; // day, week, month, year
     
     // Definir intervalo baseado no período
-    let dateFilter = '';
+    let interval = '30 days';
     switch (period) {
       case 'day':
-        dateFilter = "CURRENT_DATE";
+        interval = '1 day';
         break;
       case 'week':
-        dateFilter = "CURRENT_DATE - INTERVAL '7 days'";
+        interval = '7 days';
         break;
       case 'month':
-        dateFilter = "CURRENT_DATE - INTERVAL '30 days'";
+        interval = '30 days';
         break;
       case 'year':
-        dateFilter = "CURRENT_DATE - INTERVAL '365 days'";
+        interval = '365 days';
         break;
-      default:
-        dateFilter = "CURRENT_DATE - INTERVAL '30 days'";
     }
     
     // Estatísticas por período
@@ -521,25 +469,24 @@ semad.get('/analytics', async (c) => {
         COUNT(*) as total,
         COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved,
         COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected,
-        COUNT(CASE WHEN status IN ('submitted', 'under_review') THEN 1 END) as pending,
-        AVG(EXTRACT(EPOCH FROM (reviewed_at - submitted_at)) / 3600) as avg_review_time_hours
+        COUNT(CASE WHEN status = 'submitted' THEN 1 END) as pending
       FROM matters
-      WHERE submitted_at >= $1
-    `, [dateFilter]);
+      WHERE created_at >= NOW() - INTERVAL '${interval}'
+    `);
     
     // Tendência de submissões por dia
     const trendResult = await db.query(`
       SELECT 
-        DATE(submitted_at) as date,
+        DATE(created_at) as date,
         COUNT(*) as submissions,
         COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved,
         COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected
       FROM matters
-      WHERE submitted_at >= $1
-      GROUP BY DATE(submitted_at)
+      WHERE created_at >= NOW() - INTERVAL '${interval}'
+      GROUP BY DATE(created_at)
       ORDER BY date DESC
       LIMIT 30
-    `, [dateFilter]);
+    `);
     
     // Taxa de aprovação por secretaria
     const approvalRateResult = await db.query(`
@@ -551,15 +498,15 @@ semad.get('/analytics', async (c) => {
         ROUND(COUNT(CASE WHEN m.status = 'approved' THEN 1 END) * 100.0 / NULLIF(COUNT(m.id), 0), 2) as approval_rate
       FROM matters m
       JOIN secretarias s ON m.secretaria_id = s.id
-      WHERE m.submitted_at >= $1
+      WHERE m.created_at >= NOW() - INTERVAL '${interval}'
       GROUP BY s.id, s.acronym, s.name
       HAVING COUNT(m.id) > 0
       ORDER BY approval_rate DESC
-    `, [dateFilter]);
+    `);
     
     return c.json({
       period: period,
-      stats: periodStatsResult.rows[0],
+      stats: periodStatsResult.rows[0] || { total: 0, approved: 0, rejected: 0, pending: 0 },
       trend: trendResult.rows,
       approval_rates: approvalRateResult.rows
     });

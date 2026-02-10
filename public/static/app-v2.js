@@ -1035,15 +1035,33 @@ async function loadMatterAttachments(matterId) {
 // Função auxiliar para download de anexo
 async function downloadAttachment(attachmentId, filename) {
     try {
-        const response = await fetch(`/api/attachments/${attachmentId}/download`, {
+        // CORREÇÃO: Adicionar /matters no caminho da URL
+        const response = await fetch(`/api/matters/attachments/${attachmentId}/download`, {
             headers: {
                 'Authorization': `Bearer ${state.token}`
             }
         });
         
-        if (!response.ok) throw new Error('Erro ao baixar arquivo');
+        if (!response.ok) {
+            console.error('❌ Erro na resposta do servidor:', response.status, response.statusText);
+            const errorData = await response.json().catch(() => null);
+            throw new Error(errorData?.error || `Erro HTTP ${response.status}`);
+        }
         
+        // Tentar obter o blob
         const blob = await response.blob();
+        
+        if (!blob || blob.size === 0) {
+            throw new Error('Arquivo vazio ou inválido');
+        }
+        
+        console.log('📥 Download iniciado:', {
+            filename: filename,
+            size: (blob.size / 1024).toFixed(2) + ' KB',
+            type: blob.type
+        });
+        
+        // Criar URL para o blob
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -1051,8 +1069,15 @@ async function downloadAttachment(attachmentId, filename) {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
+        
+        // Limpar URL após uso
+        setTimeout(() => {
+            window.URL.revokeObjectURL(url);
+            console.log('✅ URL liberada da memória');
+        }, 100);
+        
     } catch (error) {
+        console.error('❌ Erro ao baixar anexo:', error);
         alert('Erro ao baixar anexo: ' + error.message);
     }
 }
@@ -1286,10 +1311,10 @@ async function loadMatterForEdit(id) {
   try {
     console.log('📝 Carregando matéria para edição ID:', id);
     
-    // Fazer a requisição diretamente com fetch para debug
     const token = localStorage.getItem('dom_token');
     console.log('🔍 Token presente?', token ? 'Sim' : 'Não');
     
+    // Carregar matéria
     const response = await fetch(`/api/matters/${id}`, {
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -1298,71 +1323,15 @@ async function loadMatterForEdit(id) {
     });
     
     console.log('🔍 Status da resposta:', response.status);
-    console.log('🔍 URL:', response.url);
     
-    const responseText = await response.text();
-    console.log('🔍 Resposta bruta:', responseText);
-    
-    // Tentar parsear como JSON
-    let matter;
-    try {
-      matter = JSON.parse(responseText);
-      console.log('✅ JSON parseado com sucesso');
-    } catch (jsonError) {
-      console.error('❌ Erro ao parsear JSON:', jsonError);
-      throw new Error('Resposta da API não é JSON válido');
+    if (!response.ok) {
+      throw new Error(`Erro HTTP ${response.status}`);
     }
     
-    console.log('🔍 Estrutura dos dados:', matter);
-    console.log('🔍 Tipo:', typeof matter);
-    console.log('🔍 É array?', Array.isArray(matter));
-    console.log('🔍 Keys:', Object.keys(matter));
-    
-    // Verificar se tem title diretamente
-    if (matter.title) {
-      console.log('✅ Title encontrado diretamente:', matter.title);
-    }
-    // Verificar se tem title em subpropriedades
-    else if (matter.data && matter.data.title) {
-      console.log('✅ Title encontrado em matter.data:', matter.data.title);
-      matter = matter.data;
-    }
-    else if (matter.matter && matter.matter.title) {
-      console.log('✅ Title encontrado em matter.matter:', matter.matter.title);
-      matter = matter.matter;
-    }
-    else {
-      // Procurar title em qualquer nível
-      const findTitle = (obj, path = '') => {
-        for (const key in obj) {
-          if (key === 'title' && obj[key]) {
-            console.log(`✅ Title encontrado em ${path}${key}:`, obj[key]);
-            return obj;
-          }
-          if (typeof obj[key] === 'object' && obj[key] !== null) {
-            const result = findTitle(obj[key], `${path}${key}.`);
-            if (result) return result;
-          }
-        }
-        return null;
-      };
-      
-      const found = findTitle(matter);
-      if (found) {
-        matter = found;
-      } else {
-        throw new Error('Propriedade "title" não encontrada na resposta da API');
-      }
-    }
+    const matter = await response.json();
+    console.log('✅ Matéria carregada:', matter.title);
     
     // Preencher os campos do formulário
-    console.log('🔄 Preenchendo formulário com dados:', {
-      id: matter.id,
-      title: matter.title,
-      matter_type_id: matter.matter_type_id,
-      content: matter.content ? matter.content.substring(0, 50) + '...' : 'vazio'
-    });
-    
     const titleInput = document.getElementById('matterTitle');
     const typeSelect = document.getElementById('matterTypeId');
     const prioritySelect = document.getElementById('matterPriority');
@@ -1397,6 +1366,9 @@ async function loadMatterForEdit(id) {
       window.currentQuillEditor.root.innerHTML = matter.content || '';
     }
     
+    // 🆕 CARREGAR ANEXOS EXISTENTES
+    await loadExistingAttachments(id);
+    
     console.log('✅ Formulário preenchido com sucesso');
     
   } catch (error) {
@@ -1407,6 +1379,409 @@ async function loadMatterForEdit(id) {
     loadView('myMatters');
   }
 }
+
+// 🆕 NOVA FUNÇÃO: Carregar anexos existentes
+async function loadExistingAttachments(matterId) {
+  try {
+    const token = localStorage.getItem('dom_token');
+    const response = await fetch(`/api/matters/${matterId}/attachments`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (!response.ok) {
+      console.log('ℹ️ Matéria não possui anexos ou erro ao carregar');
+      return;
+    }
+    
+    const data = await response.json();
+    const attachments = data.attachments || [];
+    
+    if (attachments.length > 0) {
+      console.log(`📎 Encontrados ${attachments.length} anexos`);
+      
+      // Marcar checkbox de anexos
+      const hasAttachmentsCheckbox = document.getElementById('hasAttachments');
+      const attachmentsSection = document.getElementById('attachmentsSection');
+      const selectedFilesList = document.getElementById('selectedFilesList');
+      
+      if (hasAttachmentsCheckbox) {
+        hasAttachmentsCheckbox.checked = true;
+      }
+      
+      if (attachmentsSection) {
+        attachmentsSection.style.display = 'block';
+      }
+      
+      if (selectedFilesList) {
+        // Mostrar anexos existentes
+        selectedFilesList.innerHTML = attachments.map(att => `
+          <div class="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg existing-attachment" data-id="${att.id}">
+            <div class="flex items-center space-x-3">
+              <i class="fas fa-file-${getFileIcon(att.original_name)} text-blue-600"></i>
+              <div>
+                <p class="text-sm font-medium text-gray-800">${att.original_name}</p>
+                <p class="text-xs text-gray-500">${formatFileSize(att.file_size)} • Enviado em ${formatDate(att.uploaded_at)}</p>
+              </div>
+            </div>
+            <div class="flex space-x-2">
+              <button 
+                type="button"
+                class="preview-attachment-btn text-blue-600 hover:text-blue-800"
+                title="Visualizar"
+                data-id="${att.id}"
+                data-filename="${att.original_name}"
+              >
+                <i class="fas fa-eye"></i>
+              </button>
+              <button 
+                type="button"
+                class="download-attachment-btn text-green-600 hover:text-green-800"
+                title="Download"
+                data-id="${att.id}"
+                data-filename="${att.original_name}"
+              >
+                <i class="fas fa-download"></i>
+              </button>
+              <button 
+                type="button"
+                class="delete-attachment-btn text-red-600 hover:text-red-800"
+                title="Remover"
+                data-id="${att.id}"
+                data-filename="${att.original_name}"
+              >
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </div>
+        `).join('');
+        
+        // Adicionar event listeners depois de criar o HTML
+        setTimeout(() => {
+          // Preview buttons
+          document.querySelectorAll('.preview-attachment-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              const id = this.dataset.id;
+              const filename = this.dataset.filename;
+              previewAttachment(id, filename);
+            });
+          });
+          
+          // Download buttons
+          document.querySelectorAll('.download-attachment-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              const id = this.dataset.id;
+              const filename = this.dataset.filename;
+              downloadAttachment(id, filename);
+            });
+          });
+          
+          // Delete buttons
+          document.querySelectorAll('.delete-attachment-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              const id = this.dataset.id;
+              const filename = this.dataset.filename;
+              if (confirm(`Remover anexo "${filename}"?`)) {
+                deleteExistingAttachment(id, filename);
+              }
+            });
+          });
+        }, 100);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Erro ao carregar anexos existentes:', error);
+  }
+}
+
+
+// 🆕 FUNÇÃO: Visualizar anexo - CORRIGIDA
+async function previewAttachment(attachmentId, filename) {
+  try {
+    console.log(`👁️ Tentando visualizar anexo ID: ${attachmentId}`);
+    
+    // Usar a rota de download, mas em uma nova aba
+    const token = localStorage.getItem('dom_token');
+    const downloadUrl = `/api/matters/attachments/${attachmentId}/download`;
+    
+    console.log(`🔗 URL: ${downloadUrl}`);
+    
+    // Verificar se a rota existe
+    const testResponse = await fetch(downloadUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      method: 'HEAD' // Apenas verifica se o endpoint existe
+    });
+    
+    if (!testResponse.ok) {
+      throw new Error(`Endpoint não acessível (${testResponse.status})`);
+    }
+    
+    // Criar um iframe para visualizar o arquivo
+    const viewerDiv = document.createElement('div');
+    viewerDiv.id = 'attachmentViewer';
+    viewerDiv.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.9);
+      z-index: 99999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    `;
+    
+    viewerDiv.innerHTML = `
+      <div style="background: white; border-radius: 10px; width: 95%; height: 95%; max-width: 1200px; display: flex; flex-direction: column; overflow: hidden;">
+        <div style="padding: 15px 20px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; background: #f8f9fa;">
+          <h3 style="margin: 0; font-size: 16px; font-weight: 600; color: #333;">${filename}</h3>
+          <div>
+            <button id="closeViewer" style="background: #ef4444; color: white; border: none; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: 500;">
+              <i class="fas fa-times"></i> Fechar
+            </button>
+          </div>
+        </div>
+        <div id="viewerContent" style="flex: 1; padding: 20px; overflow: auto; background: #fff;">
+          <div style="text-align: center; padding: 50px;">
+            <div class="spinner" style="display: inline-block; width: 50px; height: 50px; border: 5px solid #f3f3f3; border-top: 5px solid #3b82f6; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+            <p style="margin-top: 20px; color: #666;">Carregando arquivo...</p>
+          </div>
+        </div>
+      </div>
+      
+      <style>
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      </style>
+    `;
+    
+    document.body.appendChild(viewerDiv);
+    document.body.style.overflow = 'hidden'; // Impede scroll na página principal
+    
+    // Fechar o visualizador
+    document.getElementById('closeViewer').addEventListener('click', () => {
+      document.body.removeChild(viewerDiv);
+      document.body.style.overflow = 'auto';
+    });
+    
+    // Fechar com ESC
+    document.addEventListener('keydown', function escHandler(e) {
+      if (e.key === 'Escape') {
+        const viewer = document.getElementById('attachmentViewer');
+        if (viewer) {
+          document.body.removeChild(viewer);
+          document.body.style.overflow = 'auto';
+        }
+        document.removeEventListener('keydown', escHandler);
+      }
+    });
+    
+    // Tentar visualizar baseado no tipo de arquivo
+    const ext = filename.split('.').pop().toLowerCase();
+    const viewerContent = document.getElementById('viewerContent');
+    
+    // URLs com timestamp para evitar cache
+    const urlWithTimestamp = `${downloadUrl}?t=${Date.now()}`;
+    
+    if (['pdf'].includes(ext)) {
+      // Para PDF, usar iframe
+      viewerContent.innerHTML = `
+        <iframe 
+          src="${urlWithTimestamp}"
+          style="width: 100%; height: 100%; border: none;"
+          title="${filename}"
+        ></iframe>
+        <div style="text-align: center; padding: 10px; background: #f8f9fa; border-top: 1px solid #ddd;">
+          <p style="margin: 0; font-size: 14px; color: #666;">
+            Se o PDF não aparecer, <a href="${downloadUrl}" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 500;">
+              clique aqui para baixar
+            </a>
+          </p>
+        </div>
+      `;
+    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(ext)) {
+      // Para imagens, usar tag img
+      viewerContent.innerHTML = `
+        <div style="text-align: center; height: 100%; display: flex; align-items: center; justify-content: center; background: #f8f9fa;">
+          <div>
+            <img 
+              src="${urlWithTimestamp}" 
+              alt="${filename}" 
+              style="max-width: 100%; max-height: 80vh; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid #ddd;"
+              onerror="this.onerror=null; this.parentNode.innerHTML='<div style=\"color: #ef4444; padding: 40px;\"><i class=\"fas fa-exclamation-triangle\" style=\"font-size: 48px; margin-bottom: 20px;\"></i><p>Não foi possível carregar a imagem.</p><a href=\"${downloadUrl}\" download=\"${filename}\" style=\"display: inline-block; margin-top: 20px; padding: 10px 20px; background: #3b82f6; color: white; text-decoration: none; border-radius: 5px;\">Baixar Arquivo</a></div>';"
+            >
+            <div style="margin-top: 20px;">
+              <a href="${downloadUrl}" download="${filename}" style="display: inline-block; padding: 8px 16px; background: #3b82f6; color: white; text-decoration: none; border-radius: 5px; font-size: 14px;">
+                <i class="fas fa-download"></i> Baixar Imagem
+              </a>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (['txt', 'csv', 'json', 'xml', 'html', 'htm', 'js', 'css'].includes(ext)) {
+      // Para arquivos de texto, usar fetch para ler o conteúdo
+      try {
+        const response = await fetch(downloadUrl, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        
+        if (response.ok) {
+          const text = await response.text();
+          viewerContent.innerHTML = `
+            <div style="background: #f8f9fa; padding: 20px; height: 100%; overflow: auto;">
+              <div style="background: white; border: 1px solid #ddd; border-radius: 5px; padding: 20px; font-family: 'Courier New', monospace; font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: break-word;">
+                ${escapeHtml(text)}
+              </div>
+              <div style="text-align: center; margin-top: 20px;">
+                <a href="${downloadUrl}" download="${filename}" style="display: inline-block; padding: 10px 20px; background: #3b82f6; color: white; text-decoration: none; border-radius: 5px;">
+                  <i class="fas fa-download"></i> Download
+                </a>
+              </div>
+            </div>
+          `;
+        } else {
+          throw new Error('Erro ao carregar arquivo');
+        }
+      } catch (error) {
+        viewerContent.innerHTML = `
+          <div style="text-align: center; padding: 50px; color: #666;">
+            <i class="fas fa-exclamation-triangle" style="font-size: 48px; color: #f59e0b; margin-bottom: 20px;"></i>
+            <p>Arquivo de texto não pode ser visualizado diretamente.</p>
+            <div style="margin-top: 20px;">
+              <a href="${downloadUrl}" download="${filename}" style="display: inline-block; padding: 10px 20px; background: #3b82f6; color: white; text-decoration: none; border-radius: 5px;">
+                <i class="fas fa-download"></i> Baixar Arquivo
+              </a>
+            </div>
+          </div>
+        `;
+      }
+    } else {
+      // Para outros tipos, mostrar opção de download
+      viewerContent.innerHTML = `
+        <div style="text-align: center; padding: 50px; color: #666;">
+          <i class="fas fa-file" style="font-size: 48px; color: #6b7280; margin-bottom: 20px;"></i>
+          <p style="font-size: 16px; margin-bottom: 10px;">Arquivo: <strong>${ext.toUpperCase()}</strong></p>
+          <p>Este tipo de arquivo não pode ser visualizado no navegador.</p>
+          <div style="margin-top: 30px;">
+            <a href="${downloadUrl}" download="${filename}" style="display: inline-block; background: #3b82f6; color: white; padding: 12px 24px; border-radius: 5px; text-decoration: none; font-weight: 500;">
+              <i class="fas fa-download"></i> Baixar Arquivo
+            </a>
+          </div>
+        </div>
+      `;
+    }
+    
+  } catch (error) {
+    console.error('❌ Erro ao visualizar anexo:', error);
+    
+    // Mostrar modal de erro simples
+    alert(`❌ Erro ao visualizar arquivo:\n\n${error.message}\n\nTente baixar o arquivo para visualizar localmente.`);
+    
+    // Remover visualizador se existir
+    const viewer = document.getElementById('attachmentViewer');
+    if (viewer) {
+      document.body.removeChild(viewer);
+      document.body.style.overflow = 'auto';
+    }
+  }
+}
+
+// Função auxiliar para escapar HTML
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// 🆕 FUNÇÃO: Excluir anexo existente
+
+async function deleteExistingAttachment(attachmentId, filename) {
+  if (!confirm(`Tem certeza que deseja remover o anexo "${filename}"?\n\nEsta ação não pode ser desfeita.`)) {
+    return;
+  }
+  
+  try {
+    console.log(`🗑️ Tentando excluir anexo ID: ${attachmentId}`);
+    
+    // CORREÇÃO: Usar a rota correta
+    const response = await fetch(`/api/matters/attachments/${attachmentId}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${state.token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    console.log(`📊 Status da resposta: ${response.status}`);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ Erro na resposta: ${errorText}`);
+      
+      let errorMessage = `Erro HTTP ${response.status}`;
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMessage = errorData.error || errorMessage;
+      } catch (e) {
+        // Não é JSON, usar texto puro
+      }
+      
+      throw new Error(errorMessage);
+    }
+    
+    const result = await response.json();
+    console.log('✅ Resposta da exclusão:', result);
+    
+    // Remover elemento do DOM
+    const attachmentElement = document.querySelector(`.existing-attachment[data-id="${attachmentId}"]`);
+    if (attachmentElement) {
+      attachmentElement.remove();
+      console.log('✅ Elemento removido do DOM');
+    }
+    
+    // Verificar se ainda existem anexos
+    const remainingAttachments = document.querySelectorAll('.existing-attachment');
+    if (remainingAttachments.length === 0) {
+      // Desmarcar checkbox e esconder seção
+      const hasAttachmentsCheckbox = document.getElementById('hasAttachments');
+      const attachmentsSection = document.getElementById('attachmentsSection');
+      const selectedFilesList = document.getElementById('selectedFilesList');
+      
+      if (hasAttachmentsCheckbox) {
+        hasAttachmentsCheckbox.checked = false;
+      }
+      if (attachmentsSection) {
+        attachmentsSection.style.display = 'none';
+      }
+      if (selectedFilesList) {
+        selectedFilesList.innerHTML = '';
+      }
+    }
+    
+    alert('✅ Anexo removido com sucesso!');
+    
+  } catch (error) {
+    console.error('❌ Erro detalhado ao remover anexo:', error);
+    alert(`❌ Erro ao remover anexo:\n\n${error.message}\n\nVerifique o console (F12) para mais detalhes.`);
+  }
+}
+
 
 async function saveMatterDraft() {
     await saveMatter(false);
@@ -1433,6 +1808,8 @@ async function saveMatter(submitForReview) {
     }
     
     try {
+        let matterId = id;
+        
         if (id) {
             // Update existing
             await api.put(`/matters/${id}`, {
@@ -1446,12 +1823,8 @@ async function saveMatter(submitForReview) {
                 layout_columns
             });
             
-            if (submitForReview) {
-                await api.post(`/matters/${id}/submit`);
-                alert('Matéria atualizada e enviada para análise com sucesso!');
-            } else {
-                alert('Matéria atualizada com sucesso!');
-            }
+            matterId = id;
+            
         } else {
             // Create new
             const { data } = await api.post('/matters', {
@@ -1465,34 +1838,40 @@ async function saveMatter(submitForReview) {
                 layout_columns
             });
             
-            // Upload attachments if any
-            const hasAttachments = document.getElementById('hasAttachments')?.checked;
-            const attachmentsInput = document.getElementById('matterAttachments');
+            matterId = data.matterId;
+        }
+        
+        // Upload de novos anexos se houver
+        const hasAttachments = document.getElementById('hasAttachments')?.checked;
+        const attachmentsInput = document.getElementById('matterAttachments');
+        
+        if (hasAttachments && attachmentsInput && attachmentsInput.files.length > 0) {
+            console.log(`📤 Fazendo upload de ${attachmentsInput.files.length} arquivo(s)`);
             
-            if (hasAttachments && attachmentsInput && attachmentsInput.files.length > 0) {
-                const formData = new FormData();
-                for (let i = 0; i < attachmentsInput.files.length; i++) {
-                    formData.append('attachments', attachmentsInput.files[i]);
-                }
+            const formData = new FormData();
+            for (let i = 0; i < attachmentsInput.files.length; i++) {
+                formData.append('attachments', attachmentsInput.files[i]);
+            }
+            
+            try {
+                const uploadResponse = await api.post(`/matters/${matterId}/attachments`, formData, {
+                    headers: {
+                        'Content-Type': 'multipart/form-data'
+                    }
+                });
                 
-                try {
-                    await api.post(`/matters/${data.matterId}/attachments`, formData, {
-                        headers: {
-                            'Content-Type': 'multipart/form-data'
-                        }
-                    });
-                } catch (uploadError) {
-                    console.error('Erro ao fazer upload de anexos:', uploadError);
-                    alert('Matéria salva, mas houve erro ao fazer upload dos anexos');
-                }
+                console.log('✅ Upload de anexos concluído:', uploadResponse.data);
+            } catch (uploadError) {
+                console.error('❌ Erro ao fazer upload de anexos:', uploadError);
+                alert('Matéria salva, mas houve erro ao fazer upload dos anexos');
             }
-            
-            if (submitForReview) {
-                await api.post(`/matters/${data.matterId}/submit`);
-                alert('Matéria criada e enviada para análise com sucesso!');
-            } else {
-                alert('Matéria salva como rascunho!');
-            }
+        }
+        
+        if (submitForReview) {
+            await api.post(`/matters/${matterId}/submit`);
+            alert('Matéria salva e enviada para análise com sucesso!');
+        } else {
+            alert('Matéria salva com sucesso!');
         }
         
         loadView('myMatters');
@@ -1759,8 +2138,20 @@ async function reviewMatter(id) {
     const content = document.getElementById('mainContent');
     
     try {
+        console.log('🔍 reviewMatter chamado para ID:', id);
+        
         const { data } = await api.get(`/matters/${id}`);
-        const matter = data.matter;
+        console.log('📦 Dados recebidos da API:', data);
+        
+        // A API retorna o objeto diretamente, não dentro de { matter }
+        const matter = data;
+        
+        if (!matter || !matter.title) {
+            console.error('❌ Dados inválidos recebidos:', data);
+            throw new Error('Dados da matéria inválidos');
+        }
+        
+        console.log('✅ Matéria carregada:', matter.title);
         
         content.innerHTML = `
             <div class="mb-6">
@@ -1776,7 +2167,7 @@ async function reviewMatter(id) {
                 <div class="flex justify-between items-start mb-6">
                     <div>
                         <h2 class="text-2xl font-bold text-gray-800">${matter.title}</h2>
-                        <p class="text-gray-600 mt-2">${matter.matter_type || 'Sem tipo'}</p>
+                        <p class="text-gray-600 mt-2">${matter.matter_type_name || matter.matter_type || 'Sem tipo'}</p>
                     </div>
                     <span class="px-4 py-2 rounded-full text-sm font-medium ${getStatusColor(matter.status)}">
                         ${getStatusName(matter.status)}
@@ -1786,11 +2177,11 @@ async function reviewMatter(id) {
                 <div class="grid grid-cols-2 gap-4 mb-6 pb-6 border-b border-gray-200">
                     <div>
                         <p class="text-sm text-gray-500">Secretaria</p>
-                        <p class="font-medium">${matter.secretaria_name}</p>
+                        <p class="font-medium">${matter.secretaria_name || matter.secretaria_acronym || '-'}</p>
                     </div>
                     <div>
                         <p class="text-sm text-gray-500">Autor</p>
-                        <p class="font-medium">${matter.author_name}</p>
+                        <p class="font-medium">${matter.author_name || '-'}</p>
                     </div>
                     <div>
                         <p class="text-sm text-gray-500">Enviado em</p>
@@ -1798,7 +2189,7 @@ async function reviewMatter(id) {
                     </div>
                     <div>
                         <p class="text-sm text-gray-500">Versão</p>
-                        <p class="font-medium">v${matter.version}</p>
+                        <p class="font-medium">v${matter.version || 1}</p>
                     </div>
                 </div>
                 
@@ -1835,25 +2226,41 @@ async function reviewMatter(id) {
         `;
         
     } catch (error) {
-        content.innerHTML = `<p class="text-red-600">Erro ao carregar matéria: ${error.message}</p>`;
+        console.error('❌ Erro detalhado ao carregar matéria:', error);
+        content.innerHTML = `
+            <div class="bg-red-50 border border-red-200 rounded-lg p-6">
+                <h3 class="text-lg font-bold text-red-800 mb-2">
+                    <i class="fas fa-exclamation-triangle mr-2"></i>Erro ao carregar matéria
+                </h3>
+                <p class="text-red-700">${error.message}</p>
+                <button onclick="loadView('pendingReview')" class="mt-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                    <i class="fas fa-arrow-left mr-2"></i>Voltar para análise
+                </button>
+            </div>
+        `;
     }
 }
 
 async function approveMatter(id) {
-    const notes = document.getElementById('reviewNotes').value;
+    const notes = document.getElementById('reviewNotes')?.value || '';
     
     if (!confirm('Deseja aprovar esta matéria?')) {
         return;
     }
     
     try {
+        console.log('✅ Aprovando matéria ID:', id);
+        
         const { data } = await api.post(`/semad/${id}/approve`, {
             review_notes: notes
         });
         
-        alert(`Matéria aprovada com sucesso!\n\nAssinatura eletrônica: ${data.signature.substring(0, 16)}...`);
+        console.log('📦 Resposta da aprovação:', data);
+        
+        alert(`Matéria aprovada com sucesso!${data.signature ? `\n\nAssinatura eletrônica: ${data.signature.substring(0, 16)}...` : ''}`);
         loadView('pendingReview');
     } catch (error) {
+        console.error('❌ Erro ao aprovar matéria:', error);
         alert('Erro ao aprovar matéria: ' + (error.response?.data?.error || error.message));
     }
 }
@@ -1867,6 +2274,8 @@ async function rejectMatter(id) {
     }
     
     try {
+        console.log('❌ Rejeitando matéria ID:', id);
+        
         await api.post(`/semad/${id}/reject`, {
             rejection_reason: reason
         });
@@ -1874,6 +2283,7 @@ async function rejectMatter(id) {
         alert('Matéria rejeitada com sucesso!');
         loadView('pendingReview');
     } catch (error) {
+        console.error('❌ Erro ao rejeitar matéria:', error);
         alert('Erro ao rejeitar matéria: ' + (error.response?.data?.error || error.message));
     }
 }
@@ -3836,23 +4246,113 @@ function closeNewEditionModal() {
 async function editEdition(id) {
     try {
         const { data } = await api.get(`/editions/${id}`);
+        const edition = data; // API retorna diretamente
         
-        const newNumber = prompt('Número da edição:', data.edition_number);
-        if (!newNumber) return;
+        const modal = document.createElement('div');
+        modal.innerHTML = `
+            <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" id="editEditionModal">
+                <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="text-xl font-bold text-gray-800">
+                            <i class="fas fa-edit text-blue-600 mr-2"></i>
+                            Editar Edição
+                        </h3>
+                        <button onclick="closeEditEditionModal()" class="text-gray-400 hover:text-gray-600">
+                            <i class="fas fa-times text-xl"></i>
+                        </button>
+                    </div>
+                    
+                    <form id="editEditionForm" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">
+                                Número da Edição *
+                            </label>
+                            <input 
+                                type="text" 
+                                id="editEditionNumber" 
+                                value="${edition.edition_number}"
+                                required
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                            >
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">
+                                Data da Edição *
+                            </label>
+                            <input 
+                                type="date" 
+                                id="editEditionDate" 
+                                value="${edition.edition_date}"
+                                required
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                            >
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">
+                                Ano *
+                            </label>
+                            <input 
+                                type="number" 
+                                id="editEditionYear" 
+                                value="${edition.year}"
+                                required
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                            >
+                        </div>
+                        
+                        <div class="flex space-x-2 pt-4">
+                            <button 
+                                type="submit"
+                                class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-lg transition"
+                            >
+                                <i class="fas fa-save mr-2"></i>Salvar
+                            </button>
+                            <button 
+                                type="button"
+                                onclick="closeEditEditionModal()"
+                                class="px-4 bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold py-2 rounded-lg transition"
+                            >
+                                Cancelar
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        `;
         
-        const newDate = prompt('Data da edição (YYYY-MM-DD):', data.edition_date);
-        if (!newDate) return;
+        document.body.appendChild(modal);
         
-        await api.put(`/editions/${id}`, {
-            edition_number: newNumber,
-            edition_date: newDate
+        document.getElementById('editEditionForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const updatedData = {
+                edition_number: document.getElementById('editEditionNumber').value.trim(),
+                edition_date: document.getElementById('editEditionDate').value,
+                year: parseInt(document.getElementById('editEditionYear').value)
+            };
+            
+            try {
+                const response = await api.put(`/editions/${id}`, updatedData);
+                console.log('✅ Resposta da atualização:', response.data);
+                alert('Edição atualizada com sucesso!');
+                closeEditEditionModal();
+                loadView('editions');
+            } catch (error) {
+                console.error('❌ Erro na atualização:', error);
+                alert(error.response?.data?.error || 'Erro ao atualizar edição');
+            }
         });
         
-        alert('Edição atualizada com sucesso!');
-        loadView('editions');
     } catch (error) {
-        alert(error.response?.data?.error || 'Erro ao editar edição');
+        console.error('Error loading edition for edit:', error);
+        alert('Erro ao carregar dados da edição');
     }
+}
+
+function closeEditEditionModal() {
+    document.getElementById('editEditionModal')?.remove();
 }
 
 async function viewEdition(id) {
@@ -4421,9 +4921,24 @@ async function downloadEditionPDF(editionId, editionNumber = null, year = null) 
     try {
         // Se não tiver editionNumber/year, buscar da API
         if (!editionNumber || !year) {
+            console.log(`🔍 Buscando dados da edição ${editionId}...`);
             const { data: editionData } = await api.get(`/editions/${editionId}`);
-            editionNumber = editionData.edition.edition_number;
-            year = editionData.edition.year;
+            
+            // 🔍 VERIFICAR ESTRUTURA DOS DADOS
+            console.log('📦 Dados da edição recebidos:', editionData);
+            
+            // A API retorna o objeto da edição diretamente, não dentro de { edition }
+            const edition = editionData;
+            
+            if (!edition || !edition.edition_number) {
+                console.error('❌ Dados inválidos da edição:', editionData);
+                throw new Error('Dados da edição inválidos');
+            }
+            
+            editionNumber = edition.edition_number;
+            year = edition.year;
+            
+            console.log(`✅ Dados obtidos: ${editionNumber}/${year}`);
         }
         
         console.log(`📥 Iniciando download da edição ${editionNumber}/${year}`);
@@ -4443,37 +4958,65 @@ async function downloadEditionPDF(editionId, editionNumber = null, year = null) 
         
         // Detectar tipo de conteúdo
         const contentType = response.headers.get('content-type');
+        const contentDisposition = response.headers.get('content-disposition');
         const isPDF = contentType && contentType.includes('pdf');
+        const isHTML = contentType && contentType.includes('html');
         const extension = isPDF ? 'pdf' : 'html';
         
         console.log(`📄 Tipo de arquivo: ${extension.toUpperCase()}`);
+        console.log(`📎 Content-Type: ${contentType}`);
+        console.log(`📎 Content-Disposition: ${contentDisposition}`);
+        
+        // Obter o nome do arquivo do Content-Disposition ou gerar um
+        let filename = `diario-oficial-${editionNumber.replace(/\//g, '-')}-${year}.${extension}`;
+        
+        if (contentDisposition) {
+            const match = contentDisposition.match(/filename="(.+)"/);
+            if (match) {
+                filename = match[1];
+            }
+        }
+        
+        console.log(`💾 Nome do arquivo: ${filename}`);
         
         const blob = await response.blob();
         console.log(`💾 Tamanho do arquivo: ${(blob.size / 1024).toFixed(2)} KB`);
         
+        // Verificar se o blob não está vazio
+        if (blob.size === 0) {
+            throw new Error('Arquivo vazio recebido do servidor');
+        }
+        
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `diario-oficial-${editionNumber.replace(/\//g, '-')}-${year}.${extension}`;
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
+        
+        // Limpar URL após um tempo
+        setTimeout(() => {
+            window.URL.revokeObjectURL(url);
+            console.log('✅ URL liberada da memória');
+        }, 100);
         
         console.log('✅ Download iniciado com sucesso!');
         
-        // Informar ao usuário sobre HTML
+        // Informar ao usuário sobre HTML (se aplicável)
         if (!isPDF) {
             setTimeout(() => {
                 alert('📄 Arquivo HTML baixado com sucesso!\n\nPara converter em PDF:\n1. Abra o arquivo no navegador\n2. Use Ctrl+P ou Cmd+P\n3. Escolha "Salvar como PDF"');
-            }, 500);
+            }, 1000);
         }
         
         return true;
         
     } catch (error) {
         console.error('❌ Erro no download:', error);
-        alert('❌ Erro ao baixar arquivo:\n\n' + error.message + '\n\nVerifique o console (F12) para mais detalhes.');
+        console.error('❌ Stack:', error.stack);
+        
+        alert(`❌ Erro ao baixar arquivo:\n\n${error.message}\n\nVerifique o console (F12) para mais detalhes.`);
         return false;
     }
 }
