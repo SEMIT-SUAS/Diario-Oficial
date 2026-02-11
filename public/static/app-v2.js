@@ -782,6 +782,329 @@ function clearSemadFilters() {
     filterSemadList();
 }
 
+
+// ====================================
+// VISUALIZAÇÃO DIRETA DE ARQUIVOS - COM DEBUG
+// ====================================
+
+/**
+ * Visualiza um arquivo diretamente na mesma aba (modal)
+ * @param {number} attachmentId - ID do anexo
+ * @param {string} filename - Nome do arquivo
+ */
+async function viewAttachment(attachmentId, filename) {
+    console.log('\n========== 👁️ VIEW ATTACHMENT ==========');
+    console.log(`👁️ Visualizando anexo ID: ${attachmentId}`);
+    console.log(`📄 Nome do arquivo: ${filename}`);
+    
+    try {
+        // 1. VERIFICAR TOKEN
+        const token = localStorage.getItem('dom_token');
+        console.log(`🔑 Token no localStorage: ${token ? 'Presente' : 'AUSENTE'}`);
+        
+        if (!token) {
+            console.error('❌ Token não encontrado no localStorage');
+            alert('Sessão expirada. Faça login novamente.');
+            logout();
+            return;
+        }
+        
+        console.log(`🔑 Token (primeiros 20 chars): ${token.substring(0, 20)}...`);
+        console.log(`🔑 Tamanho do token: ${token.length} caracteres`);
+        
+        // 2. VERIFICAR TOKEN NO STATE
+        console.log(`🔑 Token no state: ${state.token ? 'Presente' : 'AUSENTE'}`);
+        
+        // 3. VERIFICAR USUÁRIO
+        console.log(`👤 Usuário atual:`, state.user);
+        
+        const url = `/api/matters/attachments/${attachmentId}/download?t=${Date.now()}`;
+        console.log(`🌐 URL da requisição: ${url}`);
+        
+        // 4. TESTAR PRIMEIRO COM FETCH SIMPLES
+        console.log('📤 Enviando requisição fetch com headers:');
+        console.log('   - Authorization: Bearer [TOKEN]');
+        console.log('   - Cache-Control: no-cache');
+        
+        const response = await fetch(url, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Cache-Control': 'no-cache, no-store',
+                'Pragma': 'no-cache'
+            }
+        });
+        
+        console.log(`📥 Status da resposta: ${response.status} ${response.statusText}`);
+        console.log('📋 Headers da resposta:');
+        response.headers.forEach((value, key) => {
+            console.log(`   - ${key}: ${value}`);
+        });
+        
+        if (!response.ok) {
+            // Tentar ler o corpo do erro
+            let errorMessage = `Erro ${response.status}: ${response.statusText}`;
+            try {
+                const errorData = await response.json();
+                console.error('❌ Corpo do erro:', errorData);
+                errorMessage = errorData.error || errorMessage;
+            } catch (e) {
+                // Não é JSON, ignorar
+            }
+            throw new Error(errorMessage);
+        }
+        
+        // 5. VERIFICAR TIPO DO ARQUIVO
+        const contentType = response.headers.get('content-type');
+        console.log(`📄 Content-Type recebido: ${contentType}`);
+        
+        const ext = filename.split('.').pop().toLowerCase();
+        console.log(`📁 Extensão do arquivo: ${ext}`);
+        
+        const isViewable = ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'txt', 'html', 'htm'].includes(ext);
+        console.log(`👁️ Pode visualizar? ${isViewable ? 'SIM' : 'NÃO'}`);
+        
+        if (!isViewable) {
+            if (confirm(`Este tipo de arquivo (${ext.toUpperCase()}) não pode ser visualizado diretamente no navegador.\n\nDeseja baixar o arquivo?`)) {
+                downloadAttachment(attachmentId, filename);
+            }
+            return;
+        }
+        
+        // 6. OBTER BLOB
+        const blob = await response.blob();
+        console.log(`📦 Blob recebido:`);
+        console.log(`   - Tamanho: ${(blob.size / 1024).toFixed(2)} KB`);
+        console.log(`   - Tipo: ${blob.type}`);
+        console.log(`   - Size: ${blob.size} bytes`);
+        
+        if (blob.size === 0) {
+            throw new Error('Arquivo vazio recebido do servidor');
+        }
+        
+        // 7. CRIAR MODAL
+        const modalId = `viewer-modal-${Date.now()}`;
+        console.log(`🪟 Criando modal: ${modalId}`);
+        
+        const modal = document.createElement('div');
+        modal.id = modalId;
+        modal.className = 'fixed inset-0 bg-black bg-opacity-90 z-[99999] flex items-center justify-center p-4';
+        modal.style.backdropFilter = 'blur(5px)';
+        
+        modal.innerHTML = `
+            <div class="bg-white rounded-xl shadow-2xl w-full h-full max-w-6xl flex flex-col overflow-hidden animate-fade-in">
+                <div class="flex justify-between items-center px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white">
+                    <div class="flex items-center space-x-3">
+                        <i class="fas fa-file-${getFileIcon(filename)} text-2xl"></i>
+                        <div>
+                            <h3 class="font-bold text-lg truncate max-w-2xl">${filename}</h3>
+                            <p class="text-xs text-blue-100" id="file-info-${attachmentId}">
+                                ${ext.toUpperCase()} • ${formatFileSize(blob.size)} • Carregado com sucesso
+                            </p>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <button onclick="downloadAttachment(${attachmentId}, '${filename}')" 
+                            class="p-2 hover:bg-blue-500 rounded-lg transition-colors" 
+                            title="Download">
+                            <i class="fas fa-download text-xl"></i>
+                        </button>
+                        <button onclick="closeAttachmentViewer('${modalId}')" 
+                            class="p-2 hover:bg-red-500 rounded-lg transition-colors" 
+                            title="Fechar">
+                            <i class="fas fa-times text-xl"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div id="viewer-content-${attachmentId}" class="flex-1 bg-gray-100 p-4 overflow-auto relative">
+                    <div class="absolute inset-0 flex items-center justify-center">
+                        <div class="text-center">
+                            <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent"></div>
+                            <p class="mt-4 text-gray-600 font-medium">Carregando visualização...</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="px-6 py-3 bg-gray-50 border-t border-gray-200 flex justify-between items-center text-sm text-gray-600">
+                    <span>
+                        <i class="fas fa-lock mr-1 text-green-600"></i>
+                        Token enviado com sucesso
+                    </span>
+                    <span>
+                        <button onclick="closeAttachmentViewer('${modalId}')" class="text-blue-600 hover:text-blue-800 font-medium">
+                            Pressione ESC para fechar
+                        </button>
+                    </span>
+                </div>
+            </div>
+            
+            <style>
+                @keyframes fadeIn {
+                    from { opacity: 0; transform: scale(0.95); }
+                    to { opacity: 1; transform: scale(1); }
+                }
+                .animate-fade-in {
+                    animation: fadeIn 0.2s ease-out;
+                }
+            </style>
+        `;
+        
+        document.body.appendChild(modal);
+        document.body.style.overflow = 'hidden';
+        
+        // 8. FECHAR COM ESC
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                closeAttachmentViewer(modalId);
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+        
+        // 9. CRIAR URL DO BLOB
+        const blobUrl = URL.createObjectURL(blob);
+        console.log(`🔗 Blob URL criada: ${blobUrl.substring(0, 30)}...`);
+        
+        // 10. RENDERIZAR CONTEÚDO
+        const viewerContainer = document.getElementById(`viewer-content-${attachmentId}`);
+        
+        if (blob.type.includes('pdf') || ext === 'pdf') {
+            console.log('📄 Renderizando PDF...');
+            viewerContainer.innerHTML = `
+                <iframe 
+                    src="${blobUrl}#toolbar=0&navpanes=0&scrollbar=1"
+                    class="w-full h-full border-0 rounded-lg shadow-lg"
+                    style="min-height: 600px;"
+                    title="${filename}"
+                ></iframe>
+                <div class="absolute bottom-8 right-8 flex space-x-2">
+                    <a href="${blobUrl}" download="${filename}" 
+                       class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow-lg flex items-center">
+                        <i class="fas fa-download mr-2"></i> Download PDF
+                    </a>
+                </div>
+            `;
+        } else if (blob.type.includes('image') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) {
+            console.log('🖼️ Renderizando imagem...');
+            viewerContainer.innerHTML = `
+                <div class="h-full flex items-center justify-center bg-gray-900">
+                    <img 
+                        src="${blobUrl}" 
+                        alt="${filename}"
+                        class="max-w-full max-h-full object-contain rounded-lg shadow-lg"
+                        style="max-height: calc(100vh - 200px);"
+                        onerror="this.onerror=null; this.parentNode.innerHTML='<div class=\'text-center text-red-600\'><i class=\'fas fa-exclamation-triangle text-4xl mb-4\'></i><p>Erro ao carregar imagem</p></div>';"
+                    >
+                </div>
+                <div class="absolute bottom-8 right-8 flex space-x-2">
+                    <a href="${blobUrl}" download="${filename}" 
+                       class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow-lg flex items-center">
+                        <i class="fas fa-download mr-2"></i> Download Imagem
+                    </a>
+                </div>
+            `;
+        } else if (blob.type.includes('text') || ['txt', 'csv', 'json', 'xml', 'html', 'htm', 'js', 'css'].includes(ext)) {
+            console.log('📝 Renderizando texto...');
+            try {
+                const text = await blob.text();
+                viewerContainer.innerHTML = `
+                    <div class="h-full bg-white rounded-lg shadow-lg overflow-auto">
+                        <pre class="p-6 font-mono text-sm whitespace-pre-wrap break-words">${escapeHtml(text)}</pre>
+                    </div>
+                    <div class="absolute bottom-8 right-8 flex space-x-2">
+                        <a href="${blobUrl}" download="${filename}" 
+                           class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow-lg flex items-center">
+                            <i class="fas fa-download mr-2"></i> Download
+                        </a>
+                    </div>
+                `;
+            } catch (e) {
+                console.error('Erro ao ler texto:', e);
+                throw new Error('Erro ao ler arquivo de texto');
+            }
+        } else {
+            console.log('📁 Tipo não visualizável, mostrando opção de download');
+            viewerContainer.innerHTML = `
+                <div class="h-full flex items-center justify-center">
+                    <div class="text-center bg-white p-12 rounded-lg shadow-lg">
+                        <i class="fas fa-file-${getFileIcon(filename)} text-6xl text-gray-400 mb-4"></i>
+                        <h4 class="text-xl font-bold text-gray-800 mb-2">${filename}</h4>
+                        <p class="text-gray-600 mb-2">Tipo: ${blob.type || 'Desconhecido'}</p>
+                        <p class="text-gray-600 mb-6">Tamanho: ${formatFileSize(blob.size)}</p>
+                        <p class="text-gray-500 mb-6">Este tipo de arquivo não pode ser visualizado diretamente.</p>
+                        <a href="${blobUrl}" download="${filename}" 
+                           class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg inline-flex items-center">
+                            <i class="fas fa-download mr-2"></i> Baixar Arquivo
+                        </a>
+                    </div>
+                </div>
+            `;
+        }
+        
+        console.log('✅ Visualização carregada com sucesso!');
+        console.log('========== FIM VIEW ATTACHMENT ==========\n');
+        
+    } catch (error) {
+        console.error('\n❌ ERRO NA VISUALIZAÇÃO:');
+        console.error('   - Mensagem:', error.message);
+        console.error('   - Stack:', error.stack);
+        console.error('========== FIM COM ERRO ==========\n');
+        
+        // Remover modal se existir
+        const existingModal = document.querySelector('[id^="viewer-modal-"]');
+        if (existingModal) {
+            existingModal.remove();
+            document.body.style.overflow = 'auto';
+        }
+        
+        // Mostrar erro e oferecer download
+        if (confirm(`❌ Erro ao visualizar arquivo: ${error.message}\n\nDeseja tentar baixar o arquivo?`)) {
+            downloadAttachment(attachmentId, filename);
+        }
+    }
+}
+
+/**
+ * Fecha o visualizador de anexos
+ * @param {string} modalId - ID do modal
+ */
+function closeAttachmentViewer(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) {
+        modal.remove();
+        document.body.style.overflow = 'auto';
+        
+        // Limpar URLs de blob
+        const iframes = modal.querySelectorAll('iframe');
+        iframes.forEach(iframe => {
+            if (iframe.src && iframe.src.startsWith('blob:')) {
+                URL.revokeObjectURL(iframe.src);
+            }
+        });
+        
+        const images = modal.querySelectorAll('img');
+        images.forEach(img => {
+            if (img.src && img.src.startsWith('blob:')) {
+                URL.revokeObjectURL(img.src);
+            }
+        });
+        
+        const links = modal.querySelectorAll('a[href^="blob:"]');
+        links.forEach(link => {
+            URL.revokeObjectURL(link.href);
+        });
+    }
+}
+
+/**
+ * Função auxiliar para escapar HTML
+ */
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // View matter details
 // View matter details - FUNÇÃO CORRIGIDA
 async function viewMatterDetails(id) {
@@ -979,6 +1302,7 @@ async function viewMatterDetails(id) {
 
 // Carregar anexos de uma matéria
 // Carregar anexos de uma matéria - FUNÇÃO CORRIGIDA
+// Carregar anexos de uma matéria - COM BOTÃO DE VISUALIZAÇÃO
 async function loadMatterAttachments(matterId) {
     const container = document.getElementById('attachmentsContainer');
     if (!container) return;
@@ -1001,8 +1325,12 @@ async function loadMatterAttachments(matterId) {
                     <i class="fas fa-paperclip mr-2"></i>Anexos (${attachments.length})
                 </h3>
                 <div class="space-y-2">
-                    ${attachments.map(att => `
-                        <div class="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg">
+                    ${attachments.map(att => {
+                        const ext = (att.original_name || att.filename).split('.').pop().toLowerCase();
+                        const isViewable = ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'txt', 'html', 'htm'].includes(ext);
+                        
+                        return `
+                        <div class="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition">
                             <div class="flex items-center space-x-3">
                                 <i class="fas fa-file-${getFileIcon(att.original_name || att.filename)} text-blue-600 text-xl"></i>
                                 <div>
@@ -1011,18 +1339,30 @@ async function loadMatterAttachments(matterId) {
                                         ${formatFileSize(att.file_size)} • 
                                         Enviado por ${att.uploaded_by_name || 'ID: ' + att.uploaded_by} • 
                                         ${formatDate(att.uploaded_at || att.created_at)}
+                                        ${isViewable ? ' • <span class="text-green-600"><i class="fas fa-eye"></i> Visualizável</span>' : ''}
                                     </p>
                                 </div>
                             </div>
-                            <button 
-                                onclick="downloadAttachment(${att.id}, '${att.original_name || att.filename}')"
-                                class="text-blue-600 hover:text-blue-800"
-                                title="Download"
-                            >
-                                <i class="fas fa-download"></i>
-                            </button>
+                            <div class="flex space-x-2">
+                                ${isViewable ? `
+                                <button 
+                                    onclick="viewAttachment(${att.id}, '${att.original_name || att.filename}')"
+                                    class="text-blue-600 hover:text-blue-800 p-2 rounded-lg hover:bg-blue-50 transition"
+                                    title="Visualizar arquivo"
+                                >
+                                    <i class="fas fa-eye text-lg"></i>
+                                </button>
+                                ` : ''}
+                                <button 
+                                    onclick="downloadAttachment(${att.id}, '${att.original_name || att.filename}')"
+                                    class="text-green-600 hover:text-green-800 p-2 rounded-lg hover:bg-green-50 transition"
+                                    title="Download"
+                                >
+                                    <i class="fas fa-download text-lg"></i>
+                                </button>
+                            </div>
                         </div>
-                    `).join('')}
+                    `}).join('')}
                 </div>
             </div>
         `;
@@ -1381,125 +1721,135 @@ async function loadMatterForEdit(id) {
 }
 
 // 🆕 NOVA FUNÇÃO: Carregar anexos existentes
+// Carregar anexos existentes - COM BOTÃO DE VISUALIZAÇÃO
 async function loadExistingAttachments(matterId) {
-  try {
-    const token = localStorage.getItem('dom_token');
-    const response = await fetch(`/api/matters/${matterId}/attachments`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    if (!response.ok) {
-      console.log('ℹ️ Matéria não possui anexos ou erro ao carregar');
-      return;
-    }
-    
-    const data = await response.json();
-    const attachments = data.attachments || [];
-    
-    if (attachments.length > 0) {
-      console.log(`📎 Encontrados ${attachments.length} anexos`);
-      
-      // Marcar checkbox de anexos
-      const hasAttachmentsCheckbox = document.getElementById('hasAttachments');
-      const attachmentsSection = document.getElementById('attachmentsSection');
-      const selectedFilesList = document.getElementById('selectedFilesList');
-      
-      if (hasAttachmentsCheckbox) {
-        hasAttachmentsCheckbox.checked = true;
-      }
-      
-      if (attachmentsSection) {
-        attachmentsSection.style.display = 'block';
-      }
-      
-      if (selectedFilesList) {
-        // Mostrar anexos existentes
-        selectedFilesList.innerHTML = attachments.map(att => `
-          <div class="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg existing-attachment" data-id="${att.id}">
-            <div class="flex items-center space-x-3">
-              <i class="fas fa-file-${getFileIcon(att.original_name)} text-blue-600"></i>
-              <div>
-                <p class="text-sm font-medium text-gray-800">${att.original_name}</p>
-                <p class="text-xs text-gray-500">${formatFileSize(att.file_size)} • Enviado em ${formatDate(att.uploaded_at)}</p>
-              </div>
-            </div>
-            <div class="flex space-x-2">
-              <button 
-                type="button"
-                class="preview-attachment-btn text-blue-600 hover:text-blue-800"
-                title="Visualizar"
-                data-id="${att.id}"
-                data-filename="${att.original_name}"
-              >
-                <i class="fas fa-eye"></i>
-              </button>
-              <button 
-                type="button"
-                class="download-attachment-btn text-green-600 hover:text-green-800"
-                title="Download"
-                data-id="${att.id}"
-                data-filename="${att.original_name}"
-              >
-                <i class="fas fa-download"></i>
-              </button>
-              <button 
-                type="button"
-                class="delete-attachment-btn text-red-600 hover:text-red-800"
-                title="Remover"
-                data-id="${att.id}"
-                data-filename="${att.original_name}"
-              >
-                <i class="fas fa-trash"></i>
-              </button>
-            </div>
-          </div>
-        `).join('');
+    try {
+        const token = localStorage.getItem('dom_token');
+        const response = await fetch(`/api/matters/${matterId}/attachments`, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
         
-        // Adicionar event listeners depois de criar o HTML
-        setTimeout(() => {
-          // Preview buttons
-          document.querySelectorAll('.preview-attachment-btn').forEach(btn => {
-            btn.addEventListener('click', function(e) {
-              e.preventDefault();
-              e.stopPropagation();
-              const id = this.dataset.id;
-              const filename = this.dataset.filename;
-              previewAttachment(id, filename);
-            });
-          });
-          
-          // Download buttons
-          document.querySelectorAll('.download-attachment-btn').forEach(btn => {
-            btn.addEventListener('click', function(e) {
-              e.preventDefault();
-              e.stopPropagation();
-              const id = this.dataset.id;
-              const filename = this.dataset.filename;
-              downloadAttachment(id, filename);
-            });
-          });
-          
-          // Delete buttons
-          document.querySelectorAll('.delete-attachment-btn').forEach(btn => {
-            btn.addEventListener('click', function(e) {
-              e.preventDefault();
-              e.stopPropagation();
-              const id = this.dataset.id;
-              const filename = this.dataset.filename;
-              if (confirm(`Remover anexo "${filename}"?`)) {
-                deleteExistingAttachment(id, filename);
-              }
-            });
-          });
-        }, 100);
-      }
+        if (!response.ok) {
+            console.log('ℹ️ Matéria não possui anexos ou erro ao carregar');
+            return;
+        }
+        
+        const data = await response.json();
+        const attachments = data.attachments || [];
+        
+        if (attachments.length > 0) {
+            console.log(`📎 Encontrados ${attachments.length} anexos`);
+            
+            // Marcar checkbox de anexos
+            const hasAttachmentsCheckbox = document.getElementById('hasAttachments');
+            const attachmentsSection = document.getElementById('attachmentsSection');
+            const selectedFilesList = document.getElementById('selectedFilesList');
+            
+            if (hasAttachmentsCheckbox) {
+                hasAttachmentsCheckbox.checked = true;
+            }
+            
+            if (attachmentsSection) {
+                attachmentsSection.style.display = 'block';
+            }
+            
+            if (selectedFilesList) {
+                // Mostrar anexos existentes
+                selectedFilesList.innerHTML = attachments.map(att => {
+                    const ext = (att.original_name || att.filename).split('.').pop().toLowerCase();
+                    const isViewable = ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'txt', 'html', 'htm'].includes(ext);
+                    
+                    return `
+                    <div class="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg existing-attachment hover:bg-gray-50 transition" data-id="${att.id}">
+                        <div class="flex items-center space-x-3">
+                            <i class="fas fa-file-${getFileIcon(att.original_name)} text-blue-600 text-xl"></i>
+                            <div>
+                                <p class="text-sm font-medium text-gray-800">${att.original_name}</p>
+                                <p class="text-xs text-gray-500">
+                                    ${formatFileSize(att.file_size)} • Enviado em ${formatDate(att.uploaded_at)}
+                                    ${isViewable ? ' • <span class="text-green-600"><i class="fas fa-eye"></i> Visualizável</span>' : ''}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="flex space-x-2">
+                            ${isViewable ? `
+                            <button 
+                                type="button"
+                                class="preview-attachment-btn text-blue-600 hover:text-blue-800 p-2 rounded-lg hover:bg-blue-50 transition"
+                                title="Visualizar"
+                                data-id="${att.id}"
+                                data-filename="${att.original_name}"
+                            >
+                                <i class="fas fa-eye text-lg"></i>
+                            </button>
+                            ` : ''}
+                            <button 
+                                type="button"
+                                class="download-attachment-btn text-green-600 hover:text-green-800 p-2 rounded-lg hover:bg-green-50 transition"
+                                title="Download"
+                                data-id="${att.id}"
+                                data-filename="${att.original_name}"
+                            >
+                                <i class="fas fa-download text-lg"></i>
+                            </button>
+                            <button 
+                                type="button"
+                                class="delete-attachment-btn text-red-600 hover:text-red-800 p-2 rounded-lg hover:bg-red-50 transition"
+                                title="Remover"
+                                data-id="${att.id}"
+                                data-filename="${att.original_name}"
+                            >
+                                <i class="fas fa-trash text-lg"></i>
+                            </button>
+                        </div>
+                    </div>
+                `}).join('');
+                
+                // Adicionar event listeners depois de criar o HTML
+                setTimeout(() => {
+                    // Preview buttons
+                    document.querySelectorAll('.preview-attachment-btn').forEach(btn => {
+                        btn.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const id = this.dataset.id;
+                            const filename = this.dataset.filename;
+                            viewAttachment(id, filename);
+                        });
+                    });
+                    
+                    // Download buttons
+                    document.querySelectorAll('.download-attachment-btn').forEach(btn => {
+                        btn.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const id = this.dataset.id;
+                            const filename = this.dataset.filename;
+                            downloadAttachment(id, filename);
+                        });
+                    });
+                    
+                    // Delete buttons
+                    document.querySelectorAll('.delete-attachment-btn').forEach(btn => {
+                        btn.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const id = this.dataset.id;
+                            const filename = this.dataset.filename;
+                            if (confirm(`Remover anexo "${filename}"?`)) {
+                                deleteExistingAttachment(id, filename);
+                            }
+                        });
+                    });
+                }, 100);
+            }
+        }
+    } catch (error) {
+        console.error('❌ Erro ao carregar anexos existentes:', error);
     }
-  } catch (error) {
-    console.error('❌ Erro ao carregar anexos existentes:', error);
-  }
 }
 
 
@@ -5267,3 +5617,4 @@ window.clearMattersFilters = clearMattersFilters;
 window.filterSemadList = filterSemadList;
 window.clearSemadFilters = clearSemadFilters;
 window.forceMenuVisibilityCheck = forceMenuVisibilityCheck;
+window.viewAttachment = viewAttachment;
