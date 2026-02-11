@@ -788,9 +788,10 @@ matters.get('/:id/attachments', async (c) => {
   }
 });
 
+
 /**
  * POST /api/matters/:id/attachments
- * Upload de anexos para uma matéria
+ * Upload de anexos para uma matéria - APENAS PDF
  */
 matters.post('/:id/attachments', async (c) => {
   console.log('🔵 Rota POST /api/matters/:id/attachments chamada');
@@ -839,7 +840,7 @@ matters.post('/:id/attachments', async (c) => {
       console.log(`🔍 Campo: ${key}, tipo: ${typeof value}`);
       
       if (value instanceof File) {
-        console.log(`📁 Arquivo encontrado: ${value.name} (${value.size} bytes)`);
+        console.log(`📁 Arquivo encontrado: ${value.name} (${value.size} bytes, Tipo: ${value.type})`);
         files.push(value);
       }
     }
@@ -851,13 +852,17 @@ matters.post('/:id/attachments', async (c) => {
 
     console.log(`📊 Total de arquivos: ${files.length}`);
     
+    // Limitar número de arquivos
     if (files.length > 10) {
       console.log(`❌ Excedeu o limite de arquivos: ${files.length} > 10`);
       return c.json({ error: 'Máximo de 10 arquivos por upload' }, 400);
     }
 
+    // Tamanho máximo por arquivo: 10MB
     const MAX_SIZE = 10 * 1024 * 1024;
+    
     for (const file of files) {
+      // 1️⃣ VALIDAÇÃO DE TAMANHO
       if (file.size > MAX_SIZE) {
         console.log(`❌ Arquivo ${file.name} excede tamanho máximo: ${file.size} > ${MAX_SIZE}`);
         return c.json({ 
@@ -865,30 +870,41 @@ matters.post('/:id/attachments', async (c) => {
         }, 400);
       }
       
-      const allowedMimeTypes = [
-        'application/pdf',
-        'image/jpeg',
-        'image/png',
-        'image/gif',
-        'application/msword',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'application/vnd.ms-excel',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      ];
+      // 2️⃣ 🚨 VALIDAÇÃO APENAS PDF 🚨
+      const isPDF = file.type === 'application/pdf' || 
+                    file.name.toLowerCase().endsWith('.pdf');
       
-      if (!allowedMimeTypes.includes(file.type) && file.type !== '') {
-        console.log(`⚠️ Tipo MIME não permitido: ${file.type}`);
-        return c.json({
-          error: `Tipo de arquivo não permitido: ${file.name}. Tipos permitidos: PDF, JPG, PNG, GIF, DOC, DOCX, XLS, XLSX`
+      if (!isPDF) {
+        console.log(`❌ Arquivo ${file.name} não é um PDF. Tipo: ${file.type || 'desconhecido'}`);
+        return c.json({ 
+          error: `Apenas arquivos PDF são permitidos. "${file.name}" não é um PDF.` 
         }, 400);
+      }
+      
+      // Verificação adicional do magic number (opcional, mais seguro)
+      try {
+        const buffer = await file.arrayBuffer();
+        const uint8Array = new Uint8Array(buffer.slice(0, 5));
+        const pdfSignature = String.fromCharCode(...uint8Array);
+        
+        if (pdfSignature !== '%PDF-') {
+          console.log(`❌ Arquivo ${file.name} não é um PDF válido (assinatura inválida)`);
+          return c.json({ 
+            error: `Arquivo "${file.name}" não é um PDF válido.` 
+          }, 400);
+        }
+      } catch (sigErr) {
+        console.log(`⚠️ Não foi possível verificar assinatura do PDF: ${file.name}`);
+        // Continuar mesmo se não conseguir ler o buffer
       }
     }
 
+    // Inserir anexos no banco de dados
     const insertedAttachments = [];
     
     for (const file of files) {
       try {
-        console.log(`💾 Salvando arquivo: ${file.name}`);
+        console.log(`💾 Salvando arquivo PDF: ${file.name}`);
         
         const uniqueFilename = `${Date.now()}-${Math.random().toString(36).substring(2)}-${file.name}`;
         
@@ -908,12 +924,12 @@ matters.post('/:id/attachments', async (c) => {
             uniqueFilename,
             file.name,
             file.size,
-            file.type || 'application/octet-stream',
+            'application/pdf', // Forçar application/pdf
             user.id
           ]
         );
         
-        console.log(`✅ Arquivo salvo no banco: ${file.name} (ID: ${result.rows[0].id})`);
+        console.log(`✅ PDF salvo no banco: ${file.name} (ID: ${result.rows[0].id})`);
         insertedAttachments.push(result.rows[0]);
       } catch (fileErr: any) {
         console.error(`❌ Erro ao salvar arquivo ${file.name}:`, fileErr);
@@ -932,10 +948,10 @@ matters.post('/:id/attachments', async (c) => {
       [id]
     );
 
-    console.log(`✅ ${insertedAttachments.length} arquivo(s) anexado(s) com sucesso à matéria ${id}`);
+    console.log(`✅ ${insertedAttachments.length} PDF(s) anexado(s) com sucesso à matéria ${id}`);
     
     return c.json({
-      message: `${insertedAttachments.length} arquivo(s) anexado(s) com sucesso`,
+      message: `${insertedAttachments.length} PDF(s) anexado(s) com sucesso`,
       attachments: insertedAttachments
     }, 201);
   } catch (err: any) {
@@ -947,6 +963,7 @@ matters.post('/:id/attachments', async (c) => {
     }, 500);
   }
 });
+
 
 /**
  * GET /api/matters - Listar matérias

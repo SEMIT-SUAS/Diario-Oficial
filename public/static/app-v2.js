@@ -1567,7 +1567,7 @@ function loadNewMatterForm(container, matterId = null) {
                             type="file" 
                             id="matterAttachments"
                             multiple
-                            accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"
+                            accept=".pdf,application/pdf"
                             class="hidden"
                             onchange="handleAttachmentSelection()"
                         >
@@ -1579,7 +1579,7 @@ function loadNewMatterForm(container, matterId = null) {
                             <i class="fas fa-upload mr-2"></i>Escolher Arquivos
                         </button>
                         <p class="text-xs text-gray-500 mt-2">
-                            Formatos aceitos: PDF, DOC, DOCX, XLS, XLSX, JPG, PNG (máx. 10MB cada)
+                            Formatos aceito: PDF e application/pdf 
                         </p>
                     </div>
                     
@@ -2246,7 +2246,9 @@ function toggleAttachmentsSection() {
     }
 }
 
+
 // Handle attachment file selection
+// Handle attachment file selection - APENAS PDF
 function handleAttachmentSelection() {
     const input = document.getElementById('matterAttachments');
     const filesList = document.getElementById('selectedFilesList');
@@ -2257,12 +2259,26 @@ function handleAttachmentSelection() {
         return;
     }
     
-    // Validate file sizes (10MB max per file)
-    const maxSize = 10 * 1024 * 1024; // 10MB
-    const invalidFiles = files.filter(f => f.size > maxSize);
+    // Validar se são PDFs
+    const invalidFiles = files.filter(f => {
+        const isPDF = f.type === 'application/pdf' || 
+                     f.name.toLowerCase().endsWith('.pdf');
+        return !isPDF;
+    });
     
     if (invalidFiles.length > 0) {
-        alert(`Os seguintes arquivos excedem o tamanho máximo de 10MB:\n${invalidFiles.map(f => f.name).join('\n')}`);
+        alert(`❌ Apenas arquivos PDF são permitidos!\n\nOs seguintes arquivos NÃO são PDFs:\n${invalidFiles.map(f => f.name).join('\n')}`);
+        input.value = '';
+        filesList.innerHTML = '';
+        return;
+    }
+    
+    // Validate file sizes (10MB max per file)
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    const oversizedFiles = files.filter(f => f.size > maxSize);
+    
+    if (oversizedFiles.length > 0) {
+        alert(`❌ Os seguintes arquivos excedem o tamanho máximo de 10MB:\n${oversizedFiles.map(f => f.name).join('\n')}`);
         input.value = '';
         filesList.innerHTML = '';
         return;
@@ -2272,10 +2288,10 @@ function handleAttachmentSelection() {
     filesList.innerHTML = files.map((file, index) => `
         <div class="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg">
             <div class="flex items-center space-x-3">
-                <i class="fas fa-file-${getFileIcon(file.name)} text-blue-600"></i>
+                <i class="fas fa-file-pdf text-red-600 text-xl"></i>
                 <div>
                     <p class="text-sm font-medium text-gray-800">${file.name}</p>
-                    <p class="text-xs text-gray-500">${formatFileSize(file.size)}</p>
+                    <p class="text-xs text-gray-500">${formatFileSize(file.size)} • PDF</p>
                 </div>
             </div>
             <button 
@@ -2289,6 +2305,7 @@ function handleAttachmentSelection() {
         </div>
     `).join('');
 }
+
 
 // Remove individual attachment
 function removeAttachment(index) {
@@ -2314,18 +2331,18 @@ function getFileIcon(filename) {
     const ext = filename.split('.').pop().toLowerCase();
     const icons = {
         'pdf': 'pdf',
-        'doc': 'word',
-        'docx': 'word',
-        'xls': 'excel',
-        'xlsx': 'excel',
-        'jpg': 'image',
-        'jpeg': 'image',
-        'png': 'image',
-        'gif': 'image',
-        'txt': 'alt',
-        'zip': 'archive',
-        'rar': 'archive',
-        '7z': 'archive'
+        // 'doc': 'word',
+        // 'docx': 'word',
+        // 'xls': 'excel',
+        // 'xlsx': 'excel',
+        // 'jpg': 'image',
+        // 'jpeg': 'image',
+        // 'png': 'image',
+        // 'gif': 'image',
+        // 'txt': 'alt',
+        // 'zip': 'archive',
+        // 'rar': 'archive',
+        // '7z': 'archive'
     };
     return icons[ext] || 'alt';
 }
