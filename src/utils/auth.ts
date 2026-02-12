@@ -8,6 +8,17 @@ import jwt from 'jsonwebtoken';
 const JWT_SECRET = process.env.JWT_SECRET || 'dom-secret-key-change-in-production';
 const SALT_ROUNDS = 10;
 
+export interface TokenPayload {
+  userId: number;
+  email: string;
+  role: string;
+  // Campos opcionais para preview
+  editionId?: number;
+  purpose?: string;
+  iat?: number;
+  exp?: number;
+}
+
 /**
  * Gera hash de senha usando bcrypt (RECOMENDADO para senhas)
  */
@@ -22,12 +33,6 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 }
 
-export interface TokenPayload {
-  userId: number;
-  email: string;
-  role: string;
-}
-
 /**
  * Gera token JWT usando jsonwebtoken
  */
@@ -36,9 +41,26 @@ export async function generateToken(payload: TokenPayload): Promise<string> {
 }
 
 /**
- * Verifica e decodifica token JWT
+ * Gera token JWT síncrono (para uso onde async não é ideal)
  */
-export async function verifyToken(token: string): Promise<TokenPayload | null> {
+export function signToken(payload: Partial<TokenPayload> & { userId: number }): string {
+  // ✅ CORRIGIDO: Não duplicar userId
+  const fullPayload: TokenPayload = {
+    userId: payload.userId,
+    email: payload.email || '',
+    role: payload.role || 'publico',
+    editionId: payload.editionId,
+    purpose: payload.purpose,
+    iat: payload.iat,
+    exp: payload.exp
+  };
+  return jwt.sign(fullPayload, JWT_SECRET, { expiresIn: '24h' });
+}
+
+/**
+ * Verifica e decodifica token JWT - Versão assíncrona
+ */
+export async function verifyTokenAsync(token: string): Promise<TokenPayload | null> {
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as TokenPayload;
     return decoded;
@@ -46,6 +68,36 @@ export async function verifyToken(token: string): Promise<TokenPayload | null> {
     console.error('Token verification error:', error);
     return null;
   }
+}
+
+/**
+ * Verifica token JWT - versão síncrona
+ */
+export function verifyToken(token: string): TokenPayload | null {
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as TokenPayload;
+    return decoded;
+  } catch (error) {
+    console.error('Token verification error:', error);
+    return null;
+  }
+}
+
+/**
+ * Gera um token temporário para preview (5 minutos)
+ */
+export function generatePreviewToken(userId: number, editionId: number): string {
+  const payload = {
+    userId,
+    email: 'preview@dom.system',
+    role: 'preview',
+    editionId,
+    purpose: 'preview',
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + (5 * 60) // 5 minutos
+  };
+  
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: '5m' });
 }
 
 /**

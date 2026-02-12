@@ -4,30 +4,48 @@
 
 import { Context, Next } from 'hono';
 import { HonoContext, User, UserRole } from '../types';
-import { verifyToken, TokenPayload } from '../utils/auth';
+import { verifyToken, signToken, TokenPayload, generatePreviewToken } from '../utils/auth';
 import db from '../lib/db';
 
+// Re-exportar funções de utils para facilitar importação
+export { verifyToken, signToken, TokenPayload, generatePreviewToken };
+
 /**
- * Middleware para verificar autenticação
+ * Middleware para verificar autenticação - AGORA COM SUPORTE A TOKEN VIA QUERY STRING
  */
 export async function authMiddleware(c: Context<HonoContext>, next: Next) {
   try {
     console.log('🔐 Auth middleware executando...');
     
-    const authHeader = c.req.header('Authorization');
+    // Tentar obter token de diferentes lugares:
+    // 1. Header Authorization (Bearer token)
+    // 2. Query parameter ?token=
+    let token = null;
     
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.log('⚠️  Token não fornecido ou formato inválido');
-      // Para desenvolvimento, vamos permitir continuar sem token
+    // Verificar header Authorization
+    const authHeader = c.req.header('Authorization');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+      console.log('🔑 Token obtido do header Authorization');
+    }
+    
+    // Se não encontrou no header, verificar query parameter
+    if (!token) {
+      token = c.req.query('token');
+      if (token) {
+        console.log('🔑 Token obtido da query string');
+      }
+    }
+    
+    if (!token) {
+      console.log('⚠️ Token não fornecido ou formato inválido');
       c.set('user', undefined);
       await next();
       return;
     }
     
-    const token = authHeader.substring(7); // Remove "Bearer "
-    
     // Verificar token
-    const decoded = await verifyToken(token);
+    const decoded = verifyToken(token);
     
     if (!decoded) {
       console.log('❌ Token inválido ou expirado');
@@ -39,7 +57,6 @@ export async function authMiddleware(c: Context<HonoContext>, next: Next) {
     console.log('✅ Token válido. Payload:', decoded);
     
     // Buscar usuário no banco - Sintaxe PostgreSQL
-    // CORREÇÃO: Removi a coluna 'cpf' que não existe
     const result = await db.query(
       `SELECT 
         id, 
@@ -145,7 +162,7 @@ export async function requireOwnSecretaria(c: Context<HonoContext>, next: Next) 
 /**
  * Middleware para log de auditoria
  */
-export async function auditLog(action: string, entityType: string) {
+export function auditLog(action: string, entityType: string) {
   return async (c: Context<HonoContext>, next: Next) => {
     const user = c.get('user');
     const entityId = c.req.param('id') || null;
@@ -162,7 +179,6 @@ export async function auditLog(action: string, entityType: string) {
       const userAgent = c.req.header('User-Agent') || 'unknown';
       
       try {
-        // Verificar se a tabela audit_logs existe
         await db.query(
           `INSERT INTO audit_logs 
            (user_id, entity_type, entity_id, action, ip_address, user_agent, created_at)
@@ -171,7 +187,6 @@ export async function auditLog(action: string, entityType: string) {
         );
       } catch (error: any) {
         console.error('❌ Erro ao registrar log de auditoria:', error.message);
-        // Não falhar a requisição principal por causa do log
       }
     }
   };
@@ -186,7 +201,7 @@ export async function optionalAuthMiddleware(c: Context<HonoContext>, next: Next
     
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7);
-      const decoded = await verifyToken(token);
+      const decoded = verifyToken(token);
       
       if (decoded) {
         const result = await db.query(
@@ -212,10 +227,79 @@ export async function optionalAuthMiddleware(c: Context<HonoContext>, next: Next
       }
     }
   } catch (error) {
-    console.log('⚠️  Token opcional inválido, continuando sem autenticação');
+    console.log('⚠️ Token opcional inválido, continuando sem autenticação');
   }
   
   await next();
+}
+
+/**
+ * Middleware específico para token de preview (com expiração curta)
+ */
+export async function previewTokenMiddleware(c: Context<HonoContext>, next: Next) {
+  try {
+    console.log('🔐 Preview Token middleware executando...');
+    
+    const token = c.req.query('token');
+    
+    if (!token) {
+      console.log('⚠️ Token de preview não fornecido');
+      return c.json({ error: 'Token de preview não fornecido' }, 401);
+    }
+    
+    // Verificar token
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      console.log('❌ Token de preview inválido ou expirado');
+      return c.json({ error: 'Token inválido ou expirado' }, 401);
+    }
+    
+    // Verificar se o token tem propósito específico de preview
+    if (decoded.purpose && decoded.purpose !== 'preview') {
+      console.log('❌ Token não é para preview');
+      return c.json({ error: 'Token inválido para esta operação' }, 401);
+    }
+    
+    // Verificar se o token expirou
+    const currentTime = Math.floor(Date.now() / 1000);
+    if (decoded.exp && decoded.exp < currentTime) {
+      console.log('❌ Token de preview expirado');
+      return c.json({ error: 'Token de preview expirado' }, 401);
+    }
+    
+    // Verificar se o editionId corresponde
+    const editionId = parseInt(c.req.param('id'));
+    if (decoded.editionId && decoded.editionId !== editionId) {
+      console.log(`❌ Token não corresponde a esta edição (esperado: ${decoded.editionId}, recebido: ${editionId})`);
+      return c.json({ error: 'Token inválido para esta edição' }, 401);
+    }
+    
+    console.log('✅ Token de preview válido');
+    
+    // Buscar usuário (opcional para preview)
+    const result = await db.query(
+      `SELECT 
+        id, 
+        name, 
+        email, 
+        role, 
+        secretaria_id, 
+        active 
+       FROM users 
+       WHERE id = $1 AND active = 1`,
+      [decoded.userId]
+    );
+    
+    if (result.rows.length > 0) {
+      c.set('user', result.rows[0] as User);
+    }
+    
+    await next();
+  } catch (error: any) {
+    console.error('❌ Erro no previewTokenMiddleware:', error.message);
+    return c.json({ error: 'Erro na autenticação do preview' }, 500);
+  }
 }
 
 /**
@@ -224,7 +308,6 @@ export async function optionalAuthMiddleware(c: Context<HonoContext>, next: Next
 export function devAuthMiddleware(c: Context<HonoContext>, next: Next) {
   console.log('🔓 Middleware de desenvolvimento - Acesso liberado');
   
-  // Crie um usuário mock para desenvolvimento
   const mockUser: User = {
     id: 1,
     email: 'admin@municipio.gov.br',
@@ -248,17 +331,14 @@ export function devAuthMiddleware(c: Context<HonoContext>, next: Next) {
 export function canAccessMatter(user: User | undefined, matter: any): boolean {
   if (!user) return false;
   
-  // Admin e SEMAD podem acessar todas
   if (user.role === 'admin' || user.role === 'semad') {
     return true;
   }
   
-  // Secretaria só pode acessar suas próprias matérias
   if (user.role === 'secretaria') {
     return matter.secretaria_id === user.secretaria_id;
   }
   
-  // Outros roles não têm acesso
   return false;
 }
 
@@ -268,17 +348,14 @@ export function canAccessMatter(user: User | undefined, matter: any): boolean {
 export function canEditMatter(user: User | undefined, matter: any): boolean {
   if (!user) return false;
   
-  // Admin pode editar tudo
   if (user.role === 'admin') {
     return true;
   }
   
-  // SEMAD pode editar matérias em análise
   if (user.role === 'semad') {
     return matter.status === 'under_review' || matter.status === 'submitted';
   }
   
-  // Secretaria só pode editar suas próprias matérias em draft ou rejeitadas
   if (user.role === 'secretaria') {
     return matter.secretaria_id === user.secretaria_id && 
            (matter.status === 'draft' || matter.status === 'rejected');
@@ -292,8 +369,6 @@ export function canEditMatter(user: User | undefined, matter: any): boolean {
  */
 export function canReviewMatter(user: User | undefined): boolean {
   if (!user) return false;
-  
-  // Apenas SEMAD e admin podem revisar
   return user.role === 'semad' || user.role === 'admin';
 }
 
@@ -302,7 +377,5 @@ export function canReviewMatter(user: User | undefined): boolean {
  */
 export function canPublishMatter(user: User | undefined): boolean {
   if (!user) return false;
-  
-  // Apenas SEMAD e admin podem publicar
   return user.role === 'semad' || user.role === 'admin';
 }

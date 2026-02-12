@@ -4435,7 +4435,7 @@ function renderEditionsTable(editions) {
                                 <button onclick="editEdition(${edition.id})" class="text-green-600 hover:text-green-900" title="Editar">
                                     <i class="fas fa-edit"></i>
                                 </button>
-                                <button onclick="previewEditionPDF(${edition.id})" class="text-teal-600 hover:text-teal-900" title="Pré-visualizar PDF">
+                                <button onclick="previewEditionPDF(${edition.id})" class="text-teal-600 hover:text-teal-900" title="Pré-visualizar">
                                     <i class="fas fa-eye"></i>
                                 </button>
                                 <button onclick="publishEdition(${edition.id})" class="text-purple-600 hover:text-purple-900" title="Publicar">
@@ -4753,7 +4753,10 @@ async function viewEdition(id) {
                                 <button onclick="addMatterToEdition(${data.id})" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
                                     <i class="fas fa-plus mr-2"></i>Adicionar Matéria
                                 </button>
-                                <button onclick="publishEdition(${data.id})" class="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg">
+                                <button onclick="previewEditionPDF(${data.id})" class="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg">
+                                    <i class="fas fa-eye mr-2"></i>Pré-visualizar
+                                </button>
+                                <button onclick="publishEdition(${data.id})" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg">
                                     <i class="fas fa-rocket mr-2"></i>Publicar Edição
                                 </button>
                             </div>
@@ -5266,16 +5269,49 @@ async function verifyMatterSignature() {
 // DOWNLOAD E EXPORTAÇÃO
 // ====================================
 
+/**
+ * Pré-visualização de edição - CORRIGIDA
+ * Usa a rota correta baseada no status da edição
+ */
 async function previewEditionPDF(editionId) {
     try {
         console.log(`👁️ Abrindo pré-visualização da edição ${editionId}`);
         
-        // Abrir PDF em nova aba
-        const url = `/api/editions/${editionId}/preview`;
+        // PRIMEIRO: Buscar dados da edição para saber o status
+        const token = localStorage.getItem('dom_token');
+        
+        const response = await fetch(`/api/editions/${editionId}`, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Erro ao buscar edição: ${response.status}`);
+        }
+        
+        const edition = await response.json();
+        console.log('📦 Dados da edição:', edition);
+        
+        // DECISÃO: Qual URL usar baseado no status
+        let url;
+        
+        if (edition.status === 'published') {
+            // Edição publicada: usa rota pública
+            url = `/api/editions/${editionId}/preview`;
+            console.log('🌐 Edição PUBLICADA - usando rota pública:', url);
+        } else {
+            // Edição em rascunho: usa rota autenticada
+            url = `/api/editions/${editionId}/preview/draft`;
+            console.log('🔒 Edição RASCUNHO - usando rota autenticada:', url);
+        }
+        
+        // Abrir em nova aba
         const newWindow = window.open(url, '_blank');
         
         if (!newWindow) {
-            alert('⚠️ Por favor, permita pop-ups para visualizar o PDF.\n\nOu clique com botão direito no botão de pré-visualização e escolha "Abrir em nova aba".');
+            alert('⚠️ Por favor, permita pop-ups para visualizar a edição.\n\nOu clique com botão direito no botão de pré-visualização e escolha "Abrir em nova aba".');
         }
         
     } catch (error) {
@@ -5284,21 +5320,33 @@ async function previewEditionPDF(editionId) {
     }
 }
 
+
+/**
+ * Download do PDF/HTML da edição - CORRIGIDA
+ * Usa a rota correta baseada no status
+ */
 async function downloadEditionPDF(editionId, editionNumber = null, year = null) {
     try {
-        // Se não tiver editionNumber/year, buscar da API
+        // Buscar dados da edição se não fornecidos
         if (!editionNumber || !year) {
             console.log(`🔍 Buscando dados da edição ${editionId}...`);
-            const { data: editionData } = await api.get(`/editions/${editionId}`);
             
-            // 🔍 VERIFICAR ESTRUTURA DOS DADOS
-            console.log('📦 Dados da edição recebidos:', editionData);
+            const token = localStorage.getItem('dom_token');
+            const response = await fetch(`/api/editions/${editionId}`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
             
-            // A API retorna o objeto da edição diretamente, não dentro de { edition }
-            const edition = editionData;
+            if (!response.ok) {
+                throw new Error(`Erro ao buscar edição: ${response.status}`);
+            }
+            
+            const edition = await response.json();
             
             if (!edition || !edition.edition_number) {
-                console.error('❌ Dados inválidos da edição:', editionData);
+                console.error('❌ Dados inválidos da edição:', edition);
                 throw new Error('Dados da edição inválidos');
             }
             
@@ -5310,8 +5358,12 @@ async function downloadEditionPDF(editionId, editionNumber = null, year = null) 
         
         console.log(`📥 Iniciando download da edição ${editionNumber}/${year}`);
         
-        // Tentar baixar PDF/HTML do backend
-        const response = await fetch(`/api/editions/${editionId}/pdf`, {
+        // DECISÃO: Qual URL usar baseado no status
+        // Para download, sempre usamos a rota pública /pdf
+        // (que só funciona para edições publicadas)
+        const url = `/api/editions/${editionId}/pdf`;
+        
+        const response = await fetch(url, {
             headers: {
                 'Authorization': `Bearer ${state.token}`
             }
@@ -5319,6 +5371,12 @@ async function downloadEditionPDF(editionId, editionNumber = null, year = null) 
         
         if (!response.ok) {
             const errorData = await response.json().catch(() => null);
+            
+            // Mensagem mais amigável para edições não publicadas
+            if (response.status === 404) {
+                throw new Error('Esta edição ainda não foi publicada. O download só está disponível após a publicação.');
+            }
+            
             const errorMsg = errorData?.error || `Erro HTTP ${response.status}`;
             throw new Error(errorMsg);
         }
@@ -5332,7 +5390,6 @@ async function downloadEditionPDF(editionId, editionNumber = null, year = null) 
         
         console.log(`📄 Tipo de arquivo: ${extension.toUpperCase()}`);
         console.log(`📎 Content-Type: ${contentType}`);
-        console.log(`📎 Content-Disposition: ${contentDisposition}`);
         
         // Obter o nome do arquivo do Content-Disposition ou gerar um
         let filename = `diario-oficial-${editionNumber.replace(/\//g, '-')}-${year}.${extension}`;
@@ -5354,9 +5411,9 @@ async function downloadEditionPDF(editionId, editionNumber = null, year = null) 
             throw new Error('Arquivo vazio recebido do servidor');
         }
         
-        const url = window.URL.createObjectURL(blob);
+        const urlBlob = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
+        a.href = urlBlob;
         a.download = filename;
         document.body.appendChild(a);
         a.click();
@@ -5364,7 +5421,7 @@ async function downloadEditionPDF(editionId, editionNumber = null, year = null) 
         
         // Limpar URL após um tempo
         setTimeout(() => {
-            window.URL.revokeObjectURL(url);
+            window.URL.revokeObjectURL(urlBlob);
             console.log('✅ URL liberada da memória');
         }, 100);
         
@@ -5383,7 +5440,7 @@ async function downloadEditionPDF(editionId, editionNumber = null, year = null) 
         console.error('❌ Erro no download:', error);
         console.error('❌ Stack:', error.stack);
         
-        alert(`❌ Erro ao baixar arquivo:\n\n${error.message}\n\nVerifique o console (F12) para mais detalhes.`);
+        alert(`❌ ${error.message}`);
         return false;
     }
 }
