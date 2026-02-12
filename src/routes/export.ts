@@ -82,7 +82,7 @@ exportRoutes.get('/matters/csv', authMiddleware, async (c) => {
         m.status,
         m.priority,
         u.name as autor,
-        m.submission_date as data_envio,
+        m.submitted_at as data_envio,
         m.scheduled_date as data_publicacao,
         m.created_at as criado_em
       FROM matters m
@@ -143,7 +143,7 @@ exportRoutes.get('/matters/xls', authMiddleware, async (c) => {
         m.status,
         m.priority,
         u.name as autor,
-        m.submission_date as data_envio,
+        m.submitted_at as data_envio,
         m.scheduled_date as data_publicacao,
         m.created_at as criado_em
       FROM matters m
