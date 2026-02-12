@@ -1426,6 +1426,10 @@ async function downloadAttachment(attachmentId, filename) {
 // NEW/EDIT MATTER FORM
 // ====================================
 
+// ====================================
+// NEW/EDIT MATTER FORM - CORRIGIDO
+// ====================================
+
 function loadNewMatterForm(container, matterId = null) {
     const matterTypesOptions = state.matterTypes.map(mt => 
         `<option value="${mt.id}">${mt.name}</option>`
@@ -1499,15 +1503,29 @@ function loadNewMatterForm(container, matterId = null) {
                 </div>
             </div>
             
+            <!-- ✅ CAMPO DE DATA DE PUBLICAÇÃO - TRAVADO E PREENCHIDO AUTOMATICAMENTE -->
             <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Data de Publicação</label>
-                <input 
-                    type="date" 
-                    id="matterPublicationDate"
-                    min="${todayDate}"
-                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                >
-                <p class="text-xs text-gray-500 mt-1">Deixe em branco para publicação imediata</p>
+                <label class="block text-sm font-medium text-gray-700 mb-2">
+                    <i class="fas fa-calendar-alt mr-1 text-blue-600"></i>
+                    Data de Publicação
+                </label>
+                <div class="relative">
+                    <input 
+                        type="date" 
+                        id="matterPublicationDate"
+                        value="${todayDate}"
+                        readonly
+                        disabled
+                        class="w-full px-4 py-2 bg-gray-100 border border-gray-300 rounded-lg text-gray-700 cursor-not-allowed"
+                    >
+                    <div class="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none">
+                        <i class="fas fa-lock text-gray-400"></i>
+                    </div>
+                </div>
+                <p class="text-xs text-gray-500 mt-1 flex items-center">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    Data definida automaticamente (data atual)
+                </p>
             </div>
 
             <!--
@@ -1654,9 +1672,7 @@ async function loadMatterForEdit(id) {
     console.log('📝 Carregando matéria para edição ID:', id);
     
     const token = localStorage.getItem('dom_token');
-    console.log('🔍 Token presente?', token ? 'Sim' : 'Não');
     
-    // Carregar matéria
     const response = await fetch(`/api/matters/${id}`, {
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -1664,14 +1680,11 @@ async function loadMatterForEdit(id) {
       }
     });
     
-    console.log('🔍 Status da resposta:', response.status);
-    
     if (!response.ok) {
       throw new Error(`Erro HTTP ${response.status}`);
     }
     
     const matter = await response.json();
-    console.log('✅ Matéria carregada:', matter.title);
     
     // Preencher os campos do formulário
     const titleInput = document.getElementById('matterTitle');
@@ -1691,36 +1704,41 @@ async function loadMatterForEdit(id) {
     typeSelect.value = matter.matter_type_id || '';
     prioritySelect.value = matter.priority || 'normal';
     
-    // Formatar data de publicação se existir
-    if (publicationDateInput && matter.publication_date) {
-      const pubDate = new Date(matter.publication_date);
-      publicationDateInput.value = pubDate.toISOString().split('T')[0];
+    // ✅ VERIFICAR SE O CAMPO DE DATA EXISTE ANTES DE USAR
+    if (publicationDateInput) {
+      const todayDate = new Date().toISOString().split('T')[0];
+      publicationDateInput.value = todayDate;
+      publicationDateInput.readOnly = true;
+      publicationDateInput.disabled = true;
     }
     
     layoutSelect.value = matter.layout_columns || '2';
-    summaryTextarea.value = matter.summary || '';
+    
+    // ✅ VERIFICAR SE O CAMPO DE RESUMO EXISTE ANTES DE USAR
+    if (summaryTextarea) {
+      summaryTextarea.value = matter.summary || '';
+    }
+    
     contentTextarea.value = matter.content || '';
     observationsTextarea.value = matter.observations || '';
     
     // Carregar conteúdo no editor Quill
     if (window.currentQuillEditor) {
-      console.log('📄 Carregando conteúdo no editor Quill');
       window.currentQuillEditor.root.innerHTML = matter.content || '';
     }
     
-    // 🆕 CARREGAR ANEXOS EXISTENTES
+    // Carregar anexos existentes
     await loadExistingAttachments(id);
     
     console.log('✅ Formulário preenchido com sucesso');
     
   } catch (error) {
     console.error('❌ Erro ao carregar matéria:', error);
-    console.error('❌ Stack:', error.stack);
-    
-    alert(`Erro ao carregar matéria para edição:\n\n${error.message}\n\nVerifique o console para mais detalhes.`);
+    alert(`Erro ao carregar matéria para edição:\n\n${error.message}`);
     loadView('myMatters');
   }
 }
+
 
 // 🆕 NOVA FUNÇÃO: Carregar anexos existentes
 // Carregar anexos existentes - COM BOTÃO DE VISUALIZAÇÃO
@@ -2147,10 +2165,18 @@ async function saveMatter(submitForReview) {
     const id = document.getElementById('matterId').value;
     const title = document.getElementById('matterTitle').value;
     const content = document.getElementById('matterContent').value;
-    const summary = document.getElementById('matterSummary').value;
+    
+    // ✅ CORREÇÃO: Verificar se o campo summary existe antes de acessar
+    const summaryElement = document.getElementById('matterSummary');
+    const summary = summaryElement ? summaryElement.value : '';
+    
     const matter_type_id = parseInt(document.getElementById('matterTypeId').value);
     const priority = document.getElementById('matterPriority').value;
-    const publication_date = document.getElementById('matterPublicationDate').value || null;
+    
+    // ✅ CORREÇÃO: Verificar se o campo de data existe antes de acessar
+    const publicationDateInput = document.getElementById('matterPublicationDate');
+    const publication_date = publicationDateInput ? publicationDateInput.value : new Date().toISOString().split('T')[0];
+    
     const observations = document.getElementById('matterObservations').value;
     const layout_columns = parseInt(document.getElementById('matterLayout').value);
     
@@ -2170,7 +2196,7 @@ async function saveMatter(submitForReview) {
                 summary,
                 matter_type_id,
                 priority,
-                publication_date,
+                scheduled_date: publication_date,
                 observations,
                 layout_columns
             });
@@ -2185,7 +2211,7 @@ async function saveMatter(submitForReview) {
                 summary,
                 matter_type_id,
                 priority,
-                publication_date,
+                scheduled_date: publication_date,
                 observations,
                 layout_columns
             });
@@ -2229,9 +2255,11 @@ async function saveMatter(submitForReview) {
         loadView('myMatters');
         
     } catch (error) {
+        console.error('❌ Erro ao salvar matéria:', error);
         alert(error.response?.data?.error || 'Erro ao salvar matéria');
     }
 }
+
 
 // Toggle attachments section
 function toggleAttachmentsSection() {

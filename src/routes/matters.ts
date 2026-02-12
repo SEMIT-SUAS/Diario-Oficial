@@ -1193,8 +1193,8 @@ matters.post('/', requireRole('secretaria', 'semad', 'admin'), async (c) => {
       category_id,
       matter_type_id,
       priority = 'normal',
-      scheduled_date,  // ← ANTES era publication_date
-      notes,           // ← ANTES era observations
+      scheduled_date,  // ← Data de publicação (agora sempre enviada pelo front)
+      notes,
     } = body;
 
     if (!title || !content || !matter_type_id) {
@@ -1204,6 +1204,9 @@ matters.post('/', requireRole('secretaria', 'semad', 'admin'), async (c) => {
     if ((user.role === 'secretaria' || user.role === 'semad') && !user.secretaria_id) {
       return c.json({ error: 'Usuário não associado a uma secretaria' }, 400);
     }
+
+    // ✅ Se não veio data, usa a data atual
+    const publicationDate = scheduled_date || new Date().toISOString().split('T')[0];
 
     const result = await db.query(
       `
@@ -1234,7 +1237,7 @@ matters.post('/', requireRole('secretaria', 'semad', 'admin'), async (c) => {
         user.secretaria_id,
         user.id,
         priority,
-        scheduled_date || null,
+        publicationDate, // ← Agora sempre tem valor
         notes || null
       ]
     );
@@ -1294,8 +1297,94 @@ matters.put('/:id', async (c) => {
       category_id,
       matter_type_id,
       priority,
-      scheduled_date,  // ← ANTES era publication_date
-      notes            // ← ANTES era observations
+      scheduled_date,
+      notes
+    } = body;
+
+    const result = await db.query(
+      `
+      UPDATE matters 
+      SET 
+        title = COALESCE($1, title),
+        content = COALESCE($2, content),
+        summary = COALESCE($3, summary),
+        category_id = COALESCE($4, category_id),
+        matter_type_id = COALESCE($5, matter_type_id),
+        priority = COALESCE($6, priority),
+        scheduled_date = COALESCE($7, scheduled_date),
+        notes = COALESCE($8, notes),
+        updated_at = NOW()
+      WHERE id = $9
+      RETURNING *
+      `,
+      [
+        title || null,
+        content || null,
+        summary || null,
+        category_id || null,
+        matter_type_id || null,
+        priority || null,
+        scheduled_date || null, // Se vier null, mantém o valor atual
+        notes || null,
+        id
+      ]
+    );
+
+    return c.json({
+      message: 'Matéria atualizada com sucesso',
+      matter: result.rows[0]
+    });
+  } catch (err: any) {
+    console.error('❌ Erro ao atualizar matéria:', err);
+    return c.json({ 
+      error: 'Erro ao atualizar matéria',
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined 
+    }, 500);
+  }
+});
+
+/**
+ * PUT /api/matters/:id - CORRIGIDO!
+ */
+// ✅ MANTER APENAS UM DESTES - remova o duplicado
+matters.put('/:id', async (c) => {
+  try {
+    const user = c.get('user');
+    if (!user) {
+      return c.json({ error: 'Não autenticado' }, 401);
+    }
+
+    const id = parseInt(c.req.param('id'));
+    const body = await c.req.json();
+
+    // Verificar se a matéria existe e se o usuário tem permissão
+    const checkResult = await db.query(
+      'SELECT id, secretaria_id, author_id, status FROM matters WHERE id = $1',
+      [id]
+    );
+
+    const matter = checkResult.rows[0];
+    if (!matter) {
+      return c.json({ error: 'Matéria não encontrada' }, 404);
+    }
+
+    if (user.role === 'secretaria' && matter.secretaria_id !== user.secretaria_id) {
+      return c.json({ error: 'Acesso negado' }, 403);
+    }
+
+    if (matter.status === 'published' && user.role !== 'admin') {
+      return c.json({ error: 'Não é possível editar uma matéria já publicada' }, 400);
+    }
+
+    const {
+      title,
+      content,
+      summary,
+      category_id,
+      matter_type_id,
+      priority,
+      scheduled_date,
+      notes
     } = body;
 
     const result = await db.query(
