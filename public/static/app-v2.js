@@ -1509,7 +1509,8 @@ function loadNewMatterForm(container, matterId = null) {
                 >
                 <p class="text-xs text-gray-500 mt-1">Deixe em branco para publicação imediata</p>
             </div>
-            
+
+            <!--
             <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">Resumo</label>
                 <textarea 
@@ -1519,6 +1520,7 @@ function loadNewMatterForm(container, matterId = null) {
                     placeholder="Resumo opcional da matéria"
                 ></textarea>
             </div>
+            -->
             
             <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">Conteúdo *</label>
